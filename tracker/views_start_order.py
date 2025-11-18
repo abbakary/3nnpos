@@ -117,14 +117,14 @@ def api_start_order(request):
                 try:
                     name_src = plate_number or f"Customer {timezone.now().strftime('%Y%m%d%H%M')}"
                     phone_src = plate_number and f"PLATE_{plate_number}" or None
-                    customer, _ = CustomerService.create_or_get_customer(
+                    customer, customer_created = CustomerService.create_or_get_customer(
                         branch=user_branch,
                         full_name=f"Plate {name_src}" if plate_number else name_src,
                         phone=phone_src,
                         customer_type='personal',
                     )
                 except Exception:
-                    customer, _ = Customer.objects.get_or_create(
+                    customer, customer_created = Customer.objects.get_or_create(
                         branch=user_branch,
                         full_name=f"Plate {plate_number}" if plate_number else f"Customer {timezone.now().strftime('%Y%m%d%H%M')}",
                         phone=(f"PLATE_{plate_number}" if plate_number else None),
