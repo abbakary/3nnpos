@@ -631,41 +631,42 @@ def parse_item_complete(item_lines, item_number):
     if unit_match:
         unit = unit_match.group(1).upper()
 
-    # Identify quantities and values
-    # Only consider integers less than 100 as potential quantities (avoid product codes like 2132004135)
-    quantities = [n for n in numbers if n['is_integer'] and 0 < n['value'] < 100]
-    potential_rates = [n for n in numbers if not n['is_integer'] or (n['value'] >= 100 and n['value'] < 1000000)]
-
-    # Determine quantity and rate
+    # Extract numbers in order without any calculations
+    # Assume order is: Qty, Rate, Value (as they appear in the document)
     quantity = 1
-    rate = None
-    value = None
+    rate = Decimal('0')
+    value = Decimal('0')
 
-    if quantities and potential_rates:
-        # Use smallest integer (but > 0) as quantity
-        quantity = int(min([q['value'] for q in quantities if q['value'] > 0]))
-        largest_value = max([r['value'] for r in potential_rates])
+    # Extract first 3 numbers in order
+    if len(numbers) >= 3:
+        # First small integer (< 100) = quantity
+        for n in numbers:
+            if n['is_integer'] and 0 < n['value'] < 100:
+                quantity = int(n['value'])
+                break
 
-        # Check if largest value makes sense as total value (qty * rate should match)
-        if largest_value > 10000:  # Likely a total value (large number)
-            value = Decimal(str(largest_value))
-            rate = value / Decimal(quantity) if quantity > 0 else Decimal('0')
-        else:
-            rate = Decimal(str(largest_value))
-            value = rate * Decimal(quantity) if quantity > 0 else Decimal('0')
-    elif quantities:
-        # Only quantities found, no rate
-        quantity = int(min([q['value'] for q in quantities if q['value'] > 0]))
-        rate = Decimal('0')
-        value = Decimal('0')
-    elif potential_rates:
-        # Only rates found, assume quantity 1
-        rate = Decimal(str(max([r['value'] for r in potential_rates])))
-        value = rate
-    else:
-        # No numbers found
-        rate = Decimal('0')
-        value = Decimal('0')
+        # Rest are likely rate and value in order
+        non_qty_numbers = [n for n in numbers if not (n['is_integer'] and 0 < n['value'] < 100)]
+        if len(non_qty_numbers) >= 2:
+            rate = Decimal(str(non_qty_numbers[0]['value']))
+            value = Decimal(str(non_qty_numbers[1]['value']))
+            logger.info(f"Fallback extraction with 3+ numbers - Qty: {quantity}, Rate: {rate}, Value: {value} (extracted as-is)")
+        elif len(non_qty_numbers) >= 1:
+            rate = Decimal(str(non_qty_numbers[0]['value']))
+            value = rate
+            logger.info(f"Fallback extraction with 2 numbers - Qty: {quantity}, Rate: {rate}, Value: {rate} (no calculation)")
+    elif len(numbers) >= 2:
+        # Only 2 numbers - assume qty and rate
+        for n in numbers:
+            if n['is_integer'] and 0 < n['value'] < 100:
+                quantity = int(n['value'])
+                break
+
+        non_qty_numbers = [n for n in numbers if not (n['is_integer'] and 0 < n['value'] < 100)]
+        if non_qty_numbers:
+            rate = Decimal(str(non_qty_numbers[0]['value']))
+            value = rate
+            logger.info(f"Fallback extraction with 2 numbers - Qty: {quantity}, Rate: {rate}, Value: {rate} (no calculation)")
     
     # Build description
     description = full_text
