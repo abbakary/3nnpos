@@ -49,7 +49,7 @@
 
               <div id="startedUploadError" class="alert alert-danger" style="display:none" role="alert"></div>
               <div id="extractionSuccess" class="alert alert-success" style="display:none" role="alert">
-                <i class="fa fa-check-circle me-2"></i>Data extracted successfully! The form below has been auto-populated.
+                <i class="fa fa-check-circle me-2"></i>Invoice data extracted successfully! The form below has been auto-populated with editable fields.
               </div>
               <div id="startedUploadProgress" class="progress" style="display:none;">
                 <div class="progress-bar progress-bar-striped progress-bar-animated" id="startedUploadProgressBar" role="progressbar" style="width: 0%"></div>
@@ -120,7 +120,7 @@
             </div>
           </div>
 
-          <!-- Line Items (Extracted) -->
+          <!-- Line Items (Extracted) - CORRECTED WITH VALUE COLUMN -->
           <div id="extractedLineItemsSection" class="card mb-3" style="display:none;">
             <div class="card-header bg-light d-flex justify-content-between align-items-center">
               <div>
@@ -142,6 +142,7 @@
                       <th class="line-item-col-unit">Unit</th>
                       <th class="line-item-col-qty">Qty</th>
                       <th class="line-item-col-rate">Unit Price</th>
+                      <th class="line-item-col-value">Value</th>
                       <th class="line-item-col-actions">Actions</th>
                     </tr>
                   </thead>
@@ -314,207 +315,8 @@
   </div>
 </div>
 
-<!-- Add Service/Item Modal -->
-<div class="modal fade" id="addServiceItemModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered modal-lg">
-    <div class="modal-content border-0 shadow-lg">
-      <div class="modal-header bg-gradient-info text-white border-0">
-        <div class="d-flex align-items-center">
-          <i class="fa fa-plus-circle me-3 fa-lg"></i>
-          <div>
-            <h5 class="modal-title fw-bold mb-0">Add Another Item/Service</h5>
-            <small class="opacity-75">Add additional service or item to this order</small>
-          </div>
-        </div>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <form id="addServiceItemForm" method="post" action="{% url 'tracker:api_update_order_from_extraction' %}">
-        {% csrf_token %}
-        <input type="hidden" name="order_id" value="{{ order.id }}">
-        <input type="hidden" name="add_component" value="true">
-
-        <div class="modal-body p-4">
-          <div class="row g-3">
-            <!-- Component Type Selection -->
-            <div class="col-12">
-              <label class="form-label fw-bold text-dark mb-2">
-                <i class="fa fa-layer-group me-2"></i>Service/Item Type <span class="text-danger">*</span>
-              </label>
-              <div class="btn-group w-100" role="group">
-                <input type="radio" class="btn-check" name="component_type" id="componentService" value="service" checked>
-                <label class="btn btn-outline-primary fw-semibold" for="componentService" style="flex: 1;">
-                  <i class="fa fa-wrench me-2"></i>Service
-                </label>
-
-                <input type="radio" class="btn-check" name="component_type" id="componentSales" value="sales">
-                <label class="btn btn-outline-success fw-semibold" for="componentSales" style="flex: 1;">
-                  <i class="fa fa-shopping-cart me-2"></i>Sales/Item
-                </label>
-              </div>
-            </div>
-
-            <!-- Sales Item Details (shown when Sales is selected) -->
-            <div id="salesItemDetails" style="display: none;">
-              <div class="col-12">
-                <label class="form-label fw-medium text-dark">
-                  <i class="fa fa-tag me-2"></i>Item Name <span class="text-danger">*</span>
-                </label>
-                <input type="text" name="component_item_name" class="form-control" placeholder="e.g., Tire, Battery, Oil, etc.">
-              </div>
-              <div class="col-md-6">
-                <label class="form-label fw-medium text-dark">
-                  <i class="fa fa-building me-2"></i>Brand
-                </label>
-                <input type="text" name="component_brand" class="form-control" placeholder="e.g., Michelin, Bosch, etc.">
-              </div>
-              <div class="col-md-6">
-                <label class="form-label fw-medium text-dark">
-                  <i class="fa fa-cubes me-2"></i>Quantity
-                </label>
-                <input type="number" name="component_quantity" class="form-control" placeholder="e.g., 4" min="1" value="1">
-              </div>
-              <div class="col-12">
-                <label class="form-label fw-medium text-dark">
-                  <i class="fa fa-cog me-2"></i>Tire Type <small class="text-muted">(if applicable)</small>
-                </label>
-                <select name="component_tire_type" class="form-select">
-                  <option value="New">New</option>
-                  <option value="Used">Used</option>
-                  <option value="Refurbished">Refurbished</option>
-                  <option value="Other">Other</option>
-                </select>
-              </div>
-            </div>
-
-            <!-- Reason for adding -->
-            <div class="col-12">
-              <label class="form-label fw-bold text-dark mb-2">
-                <i class="fa fa-comment-alt me-2"></i>Reason for Adding <span class="text-danger">*</span>
-              </label>
-              <textarea name="component_reason" class="form-control" rows="3" placeholder="e.g., Additional repair found, customer requested, replacement part needed, warranty service, etc." required></textarea>
-              <small class="text-muted d-block mt-1">Explain why this item/service is being added to the order</small>
-            </div>
-
-            <!-- Additional Notes -->
-            <div class="col-12">
-              <label class="form-label fw-medium text-dark mb-2">
-                <i class="fa fa-clipboard me-2"></i>Additional Notes <small class="text-muted">(optional)</small>
-              </label>
-              <textarea name="component_notes" class="form-control" rows="2" placeholder="Any additional details or specifications..."></textarea>
-            </div>
-          </div>
-
-          <div class="alert alert-light border-start border-4 border-info mt-3 mb-0">
-            <i class="fa fa-info-circle me-2 text-info"></i>
-            <strong>Note:</strong> This item/service will be added as a component to the current order. You can add multiple items before completing the order.
-          </div>
-        </div>
-
-        <div class="modal-footer bg-light border-top">
-          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
-            <i class="fa fa-times me-2"></i>Cancel
-          </button>
-          <button type="button" class="btn btn-info" id="addAnotherItemBtn">
-            <i class="fa fa-plus me-2"></i>Add & Continue
-          </button>
-          <button type="submit" class="btn btn-success fw-bold">
-            <i class="fa fa-check-circle me-2"></i>Add & Close
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-</div>
-
-<script>
-(function() {
-  const componentServiceRadio = document.getElementById('componentService');
-  const componentSalesRadio = document.getElementById('componentSales');
-  const salesItemDetails = document.getElementById('salesItemDetails');
-  const addServiceItemForm = document.getElementById('addServiceItemForm');
-  const addAnotherItemBtn = document.getElementById('addAnotherItemBtn');
-
-  // Show/hide sales item details based on selection
-  function toggleSalesDetails() {
-    if (componentSalesRadio.checked) {
-      salesItemDetails.style.display = 'block';
-      document.querySelector('[name="component_item_name"]').required = true;
-    } else {
-      salesItemDetails.style.display = 'none';
-      document.querySelector('[name="component_item_name"]').required = false;
-    }
-  }
-
-  componentServiceRadio.addEventListener('change', toggleSalesDetails);
-  componentSalesRadio.addEventListener('change', toggleSalesDetails);
-
-  // Handle "Add & Continue" button
-  addAnotherItemBtn.addEventListener('click', function(e) {
-    e.preventDefault();
-
-    // Validate required fields
-    const reason = document.querySelector('[name="component_reason"]').value.trim();
-    if (!reason) {
-      alert('Please provide a reason for adding this item/service');
-      return;
-    }
-
-    if (componentSalesRadio.checked) {
-      const itemName = document.querySelector('[name="component_item_name"]').value.trim();
-      if (!itemName) {
-        alert('Please provide the item name');
-        return;
-      }
-    }
-
-    // Submit form silently and reset
-    const formData = new FormData(addServiceItemForm);
-    fetch(addServiceItemForm.action, {
-      method: 'POST',
-      body: formData,
-      headers: {
-        'X-Requested-With': 'XMLHttpRequest'
-      }
-    })
-    .then(response => response.json())
-    .then(data => {
-      if (data.success) {
-        // Show success message
-        const successMsg = document.createElement('div');
-        successMsg.className = 'alert alert-success alert-dismissible fade show';
-        successMsg.innerHTML = `
-          <i class="fa fa-check-circle me-2"></i>
-          <strong>Item/Service added successfully!</strong> You can add another one or close this dialog.
-          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        `;
-        addServiceItemForm.insertBefore(successMsg, addServiceItemForm.firstChild);
-
-        // Reset form for next entry
-        addServiceItemForm.reset();
-        componentServiceRadio.checked = true;
-        toggleSalesDetails();
-
-        // Auto-dismiss success message after 4 seconds
-        setTimeout(() => {
-          successMsg.remove();
-        }, 4000);
-      } else {
-        alert('Error: ' + (data.error || 'Failed to add item'));
-      }
-    })
-    .catch(err => {
-      console.error('Error:', err);
-      alert('Failed to add item. Please try again.');
-    });
-  });
-
-  // Initialize on load
-  toggleSalesDetails();
-})();
-</script>
-
 <style>
-/* Line items table - proper layout that handles long descriptions */
+/* Line items table - proper layout that handles all columns including Value */
 .line-items-table {
   font-size: 0.85rem;
   width: 100%;
@@ -542,31 +344,39 @@
 
 /* Column width definitions - using percentages for fixed layout */
 .line-item-col-num {
-  width: 5%;
+  width: 4%;
   text-align: center;
 }
 
 .line-item-col-code {
-  width: 12%;
+  width: 10%;
 }
 
 .line-item-col-desc {
-  width: 40%;
+  width: 35%;
   word-break: break-word;
   white-space: normal;
   overflow-wrap: break-word;
 }
 
 .line-item-col-unit {
-  width: 10%;
+  width: 8%;
 }
 
 .line-item-col-qty {
-  width: 10%;
+  width: 8%;
 }
 
 .line-item-col-rate {
+  width: 12%;
+}
+
+.line-item-col-value {
   width: 15%;
+  font-weight: 600;
+  text-align: right;
+  background-color: #f8f9fa;
+  font-family: 'Courier New', monospace;
 }
 
 .line-item-col-actions {
@@ -614,17 +424,11 @@
   color: white;
 }
 
-/* Body styling for consistent row heights */
-.line-items-body tr {
-  height: auto;
-}
-
-/* Ensure descriptions wrap and don't overflow */
-.line-items-table .line-item-col-desc {
-  max-width: 0;
-  overflow-wrap: break-word;
-  word-wrap: break-word;
-  white-space: pre-wrap;
+/* Value display styling */
+.item-value-display {
+  font-weight: 600;
+  color: #2c5aa0;
+  font-family: 'Courier New', monospace;
 }
 
 /* Responsive adjustments */
@@ -634,14 +438,18 @@
   }
 
   .line-item-col-desc {
-    width: 35%;
+    width: 30%;
   }
 
   .line-item-col-code {
-    width: 10%;
+    width: 8%;
   }
 
   .line-item-col-rate {
+    width: 10%;
+  }
+
+  .line-item-col-value {
     width: 12%;
   }
 }
@@ -663,35 +471,38 @@
   }
 
   .line-item-col-num {
-    width: 6%;
+    width: 5%;
   }
 
   .line-item-col-code {
-    width: 10%;
+    width: 8%;
   }
 
   .line-item-col-desc {
-    width: 30%;
+    width: 25%;
   }
 
   .line-item-col-unit {
-    width: 8%;
+    width: 6%;
   }
 
   .line-item-col-qty {
-    width: 8%;
+    width: 6%;
   }
 
   .line-item-col-rate {
-    width: 12%;
+    width: 8%;
+  }
+
+  .line-item-col-value {
+    width: 10%;
   }
 
   .line-item-col-actions {
-    width: 10%;
+    width: 8%;
   }
 }
 </style>
-
 <script>
 // Invoice Upload Modal - Extraction Handler
 (function() {
@@ -706,6 +517,7 @@
   const lineItemsBody = document.getElementById('lineItemRowsBody');
   const hiddenFieldsDiv = document.getElementById('extractedHiddenFields');
   const manualForm = document.getElementById('manualInvoiceForm');
+  const addRowBtn = document.getElementById('addLineItemRowBtn');
 
   if (!uploadBtn) return;
 
@@ -882,26 +694,36 @@
       const rate = item.rate || 0;
       const value = item.value || (qty * rate);
 
-      // Create table row
+      // Create table row with ALL columns including Value
       const row = document.createElement('tr');
+      row.dataset.itemIndex = idx;
       row.innerHTML = `
         <td class="text-center"><small>${idx + 1}</small></td>
-        <td><small>${code || '-'}</small></td>
-        <td><small>${desc}</small></td>
-        <td><small>${unit || '-'}</small></td>
-        <td><input type="number" class="form-control form-control-sm" value="${qty}" min="1" data-item-index="${idx}"></td>
-        <td><input type="number" class="form-control form-control-sm" value="${rate.toFixed(2)}" step="0.01" min="0" data-item-index="${idx}"></td>
-        <td class="text-center"><button type="button" class="btn btn-sm btn-danger remove-line-item" data-item-index="${idx}"><i class="fa fa-trash"></i></button></td>
+        <td><input type="text" class="form-control form-control-sm code-input" value="${code}" placeholder="Item code" data-item-index="${idx}"></td>
+        <td><textarea class="form-control form-control-sm desc-input" rows="2" placeholder="Item description" data-item-index="${idx}" style="resize: vertical; min-height: 40px;">${desc}</textarea></td>
+        <td><input type="text" class="form-control form-control-sm unit-input" value="${unit}" placeholder="Unit" data-item-index="${idx}"></td>
+        <td><input type="number" class="form-control form-control-sm qty-input" value="${qty}" min="1" step="1" data-item-index="${idx}"></td>
+        <td><input type="number" class="form-control form-control-sm rate-input" value="${rate.toFixed(2)}" step="0.01" min="0" data-item-index="${idx}"></td>
+        <td class="line-item-col-value">
+          <span class="item-value-display" data-item-index="${idx}">${value.toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+          <input type="hidden" class="value-input" value="${value}" data-item-index="${idx}">
+        </td>
+        <td class="text-center">
+          <button type="button" class="btn btn-sm btn-danger remove-line-item" data-item-index="${idx}">
+            <i class="fa fa-trash"></i>
+          </button>
+        </td>
       `;
       lineItemsBody.appendChild(row);
 
-      // Create hidden form fields
+      // Create hidden form fields for ALL data
       const fields = [
         { name: 'item_code[]', value: code },
         { name: 'item_description[]', value: desc },
         { name: 'item_unit[]', value: unit },
         { name: 'item_qty[]', value: qty },
-        { name: 'item_price[]', value: rate }
+        { name: 'item_price[]', value: rate },
+        { name: 'item_value[]', value: value }
       ];
 
       fields.forEach(field => {
@@ -914,30 +736,185 @@
       });
     });
 
-    // Attach remove button handlers
+    // Add event listeners for quantity and rate changes to auto-calculate value
+    document.querySelectorAll('.qty-input, .rate-input').forEach(input => {
+      input.addEventListener('input', function() {
+        const idx = this.dataset.itemIndex;
+        updateItemValue(idx);
+      });
+    });
+
+    // Add event listeners for code, description, unit changes
+    document.querySelectorAll('.code-input, .desc-input, .unit-input').forEach(input => {
+      input.addEventListener('change', function() {
+        const idx = this.dataset.itemIndex;
+        const fieldType = this.classList[1].replace('-input', '');
+        updateHiddenField(idx, fieldType, this.value);
+      });
+    });
+
+    // Remove button handlers
     document.querySelectorAll('.remove-line-item').forEach(btn => {
       btn.addEventListener('click', function(e) {
         e.preventDefault();
         const idx = this.dataset.itemIndex;
-        document.querySelectorAll(`tr[data-item-index="${idx}"]`).forEach(el => el.remove());
-        document.querySelectorAll(`input[data-item-index="${idx}"]`).forEach(el => el.remove());
+        removeItemRow(idx);
       });
     });
 
-    // Add row data update listeners
-    document.querySelectorAll('.line-items-body input').forEach(input => {
-      input.addEventListener('change', function() {
-        const idx = this.dataset.itemIndex;
-        const hiddenInputs = hiddenFieldsDiv.querySelectorAll(`input[data-item-index="${idx}"]`);
+    // Add row button handler
+    if (addRowBtn) {
+      addRowBtn.addEventListener('click', function() {
+        addNewItemRow();
+      });
+    }
+  }
 
-        // Update corresponding hidden field based on column
-        if (this.classList.contains('qty-input')) {
-          const qtyField = Array.from(hiddenInputs).find(i => i.name === 'item_qty[]');
-          if (qtyField) qtyField.value = this.value;
-        } else if (this.classList.contains('rate-input')) {
-          const rateField = Array.from(hiddenInputs).find(i => i.name === 'item_price[]');
-          if (rateField) rateField.value = this.value;
+  function updateItemValue(itemIndex) {
+    const qtyInput = document.querySelector(`.qty-input[data-item-index="${itemIndex}"]`);
+    const rateInput = document.querySelector(`.rate-input[data-item-index="${itemIndex}"]`);
+    const valueDisplay = document.querySelector(`.item-value-display[data-item-index="${itemIndex}"]`);
+    const valueInput = document.querySelector(`.value-input[data-item-index="${itemIndex}"]`);
+
+    if (qtyInput && rateInput) {
+      const qty = parseFloat(qtyInput.value) || 0;
+      const rate = parseFloat(rateInput.value) || 0;
+      const value = qty * rate;
+
+      if (valueDisplay) {
+        valueDisplay.textContent = value.toLocaleString('en-US', {minimumFractionDigits: 2});
+      }
+      if (valueInput) {
+        valueInput.value = value;
+      }
+
+      // Update hidden fields
+      updateHiddenField(itemIndex, 'qty', qty);
+      updateHiddenField(itemIndex, 'price', rate);
+      updateHiddenField(itemIndex, 'value', value);
+    }
+  }
+
+  function updateHiddenField(itemIndex, fieldType, value) {
+    const hiddenInput = document.querySelector(`input[name="item_${fieldType}[]"][data-item-index="${itemIndex}"]`);
+    if (hiddenInput) {
+      hiddenInput.value = value;
+    }
+  }
+
+  function removeItemRow(itemIndex) {
+    // Remove table row
+    const row = document.querySelector(`tr[data-item-index="${itemIndex}"]`);
+    if (row) row.remove();
+    
+    // Remove hidden fields
+    document.querySelectorAll(`input[data-item-index="${itemIndex}"]`).forEach(el => el.remove());
+    
+    // Reindex remaining items
+    reindexLineItems();
+  }
+
+  function addNewItemRow() {
+    const currentRows = lineItemsBody.querySelectorAll('tr');
+    const newIndex = currentRows.length;
+    
+    const row = document.createElement('tr');
+    row.dataset.itemIndex = newIndex;
+    row.innerHTML = `
+      <td class="text-center"><small>${newIndex + 1}</small></td>
+      <td><input type="text" class="form-control form-control-sm code-input" value="" placeholder="Item code" data-item-index="${newIndex}"></td>
+      <td><textarea class="form-control form-control-sm desc-input" rows="2" placeholder="Item description" data-item-index="${newIndex}" style="resize: vertical; min-height: 40px;"></textarea></td>
+      <td><input type="text" class="form-control form-control-sm unit-input" value="" placeholder="Unit" data-item-index="${newIndex}"></td>
+      <td><input type="number" class="form-control form-control-sm qty-input" value="1" min="1" step="1" data-item-index="${newIndex}"></td>
+      <td><input type="number" class="form-control form-control-sm rate-input" value="0.00" step="0.01" min="0" data-item-index="${newIndex}"></td>
+      <td class="line-item-col-value">
+        <span class="item-value-display" data-item-index="${newIndex}">0.00</span>
+        <input type="hidden" class="value-input" value="0" data-item-index="${newIndex}">
+      </td>
+      <td class="text-center">
+        <button type="button" class="btn btn-sm btn-danger remove-line-item" data-item-index="${newIndex}">
+          <i class="fa fa-trash"></i>
+        </button>
+      </td>
+    `;
+    lineItemsBody.appendChild(row);
+
+    // Create hidden form fields
+    const fields = [
+      { name: 'item_code[]', value: '' },
+      { name: 'item_description[]', value: '' },
+      { name: 'item_unit[]', value: '' },
+      { name: 'item_qty[]', value: '1' },
+      { name: 'item_price[]', value: '0' },
+      { name: 'item_value[]', value: '0' }
+    ];
+
+    fields.forEach(field => {
+      const inp = document.createElement('input');
+      inp.type = 'hidden';
+      inp.name = field.name;
+      inp.value = field.value;
+      inp.dataset.itemIndex = newIndex;
+      hiddenFieldsDiv.appendChild(inp);
+    });
+
+    // Add event listeners for the new row
+    document.querySelectorAll(`.qty-input[data-item-index="${newIndex}"], .rate-input[data-item-index="${newIndex}"]`).forEach(input => {
+      input.addEventListener('input', function() {
+        updateItemValue(newIndex);
+      });
+    });
+
+    document.querySelectorAll(`.code-input[data-item-index="${newIndex}"], .desc-input[data-item-index="${newIndex}"], .unit-input[data-item-index="${newIndex}"]`).forEach(input => {
+      input.addEventListener('change', function() {
+        const fieldType = this.classList[1].replace('-input', '');
+        updateHiddenField(newIndex, fieldType, this.value);
+      });
+    });
+
+    document.querySelector(`.remove-line-item[data-item-index="${newIndex}"]`).addEventListener('click', function(e) {
+      e.preventDefault();
+      removeItemRow(newIndex);
+    });
+  }
+
+  function reindexLineItems() {
+    const rows = lineItemsBody.querySelectorAll('tr');
+    rows.forEach((row, index) => {
+      const newIndex = index;
+      row.dataset.itemIndex = newIndex;
+      
+      // Update all inputs and buttons with new index
+      row.querySelectorAll('input, button, span, textarea').forEach(el => {
+        if (el.dataset.itemIndex !== undefined) {
+          el.dataset.itemIndex = newIndex;
         }
+      });
+      
+      // Update row number
+      const numCell = row.querySelector('td:first-child');
+      if (numCell) {
+        numCell.innerHTML = `<small>${newIndex + 1}</small>`;
+      }
+    });
+
+    // Update hidden fields indexing
+    const hiddenInputs = hiddenFieldsDiv.querySelectorAll('input[data-item-index]');
+    const reindexedInputs = {};
+    
+    // Group by old index
+    hiddenInputs.forEach(input => {
+      const oldIndex = input.dataset.itemIndex;
+      if (!reindexedInputs[oldIndex]) {
+        reindexedInputs[oldIndex] = [];
+      }
+      reindexedInputs[oldIndex].push(input);
+    });
+    
+    // Reindex sequentially
+    Object.values(reindexedInputs).forEach((inputs, newIndex) => {
+      inputs.forEach(input => {
+        input.dataset.itemIndex = newIndex;
       });
     });
   }

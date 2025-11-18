@@ -25,27 +25,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def extract_text_from_pdf(file_bytes) -> str:
-    """Extract text from PDF file using PyMuPDF or PyPDF2.
-
-    Args:
-        file_bytes: Raw bytes of PDF file
-
-    Returns:
-        Extracted text string
-
-    Raises:
-        RuntimeError: If no PDF extraction library is available or text extraction fails
-    """
+    """Extract text from PDF file using PyMuPDF or PyPDF2."""
     text = ""
     fitz_error = None
     pdf2_error = None
 
-    # Try PyMuPDF first (fitz) - best for text extraction
     if fitz is not None:
         try:
             doc = fitz.open(stream=file_bytes, filetype="pdf")
             for page in doc:
-                # Use layout preservation for better structure
                 page_text = page.get_text("text", sort=True)
                 if page_text:
                     text += page_text + "\n"
@@ -62,7 +50,6 @@ def extract_text_from_pdf(file_bytes) -> str:
             fitz_error = str(e)
             text = ""
 
-    # Fallback to PyPDF2
     if PyPDF2 is not None and not text.strip():
         try:
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
@@ -84,7 +71,6 @@ def extract_text_from_pdf(file_bytes) -> str:
             logger.warning(f"PyPDF2 extraction failed: {e}")
             pdf2_error = str(e)
 
-    # If we get here, extraction failed with both libraries
     if not fitz and not PyPDF2:
         error_msg = 'No PDF extraction library available. Install PyMuPDF or PyPDF2.'
     elif fitz_error and pdf2_error:
@@ -97,748 +83,640 @@ def extract_text_from_pdf(file_bytes) -> str:
     raise RuntimeError(error_msg)
 
 def extract_text_from_image(file_bytes) -> str:
-    """Extract text from image file.
-    Since OCR is not available, this returns empty string.
-    
-    Args:
-        file_bytes: Raw bytes of image file
-        
-    Returns:
-        Empty string (manual entry required for images)
-    """
+    """Extract text from image file."""
     logger.info("Image file detected. OCR not available. Manual entry required.")
     return ""
 
-def _extract_items_with_coordinates(file_bytes):
-    """Extract items using coordinate-based parsing for table structures."""
-    items = []
-    try:
-        if fitz is None:
-            return items
-            
-        doc = fitz.open(stream=file_bytes, filetype="pdf")
-        for page in doc:
-            words = page.get_text("words")
-            if not words:
-                continue
-                
-            # Group by line_no for structure
-            lines_map = {}
-            for w in words:
-                x0, y0, x1, y1, text, block_no, line_no, word_no = w
-                lines_map.setdefault((block_no, line_no), []).append((x0, y0, x1, y1, text))
-
-            # Sort words in each line left-to-right
-            ordered_lines = []
-            for key, line_words in lines_map.items():
-                line_words.sort(key=lambda t: t[0])
-                ordered_lines.append((key, line_words))
-                
-            # Sort lines by vertical position
-            ordered_lines.sort(key=lambda kv: kv[1][0][1])
-
-            # Detect header line by keywords
-            header_idx = None
-            header_words = None
-            for i, (_, lw) in enumerate(ordered_lines):
-                joined = ' '.join([t[4] for t in lw])
-                kw_hits = 0
-                for pat in (r'\bSr\b|\bS\.?\s*No\.?', r'Item\s*Code|Code', r'Description|Desc', r'Qty|Quantity', r'Rate|Unit\s*Price|Price', r'Value|Amount'):
-                    if re.search(pat, joined, re.I):
-                        kw_hits += 1
-                if kw_hits >= 3:
-                    header_idx = i
-                    header_words = lw
-                    break
-                    
-            if header_idx is None:
-                continue
-
-            # Determine column x positions from header keywords
-            columns = []  # list of (name, x_start)
-            def find_word_x(prefixes):
-                for x0, y0, x1, y1, text in header_words:
-                    for p in prefixes:
-                        if re.search(p, text, re.I):
-                            return x0
-                return None
-
-            col_defs = [
-                ("sr", [r'^sr$', r'^s\.?\s*no\.?$', r'^no\.?$']),
-                ("code", [r'item\s*code', r'^code$']),
-                ("description", [r'^description$', r'^desc$']),
-                ("type", [r'^type$', r'^unit$']),
-                ("qty", [r'^qty$', r'^quantity$']),
-                ("rate", [r'^rate$', r'unit\s*price', r'^price$']),
-                ("value", [r'^value$', r'^amount$', r'^total$']),
-            ]
-            
-            for name, pats in col_defs:
-                x = find_word_x(pats)
-                if x is not None:
-                    columns.append((name, x))
-                    
-            if not columns:
-                continue
-                
-            columns.sort(key=lambda c: c[1])
-            
-            # Build column ranges using midpoints
-            ranges = []  # list of (name, x_min, x_max)
-            for idx, (name, x) in enumerate(columns):
-                if idx == 0:
-                    left = x - 2
-                    right = (columns[idx + 1][1] + x) / 2 if idx + 1 < len(columns) else x + 2000
-                elif idx == len(columns) - 1:
-                    left = (columns[idx - 1][1] + x) / 2
-                    right = x + 2000
-                else:
-                    left = (columns[idx - 1][1] + x) / 2
-                    right = (columns[idx + 1][1] + x) / 2
-                ranges.append((name, left, right))
-
-            # Parse item lines until totals section
-            header_y = header_words[0][1]
-            for i in range(header_idx + 1, len(ordered_lines)):
-                _, lw = ordered_lines[i]
-                line_y = lw[0][1]
-                
-                # Stop if we reach summary keywords
-                joined = ' '.join([t[4] for t in lw])
-                if re.search(r'(Net\s*Value|Gross\s*Value|Grand\s*Total|Total\s*:)', joined, re.I):
-                    break
-
-                # Collect cell text by ranges
-                cells = {name: [] for name, _, _ in ranges}
-                for x0, y0, x1, y1, text in lw:
-                    for name, xmin, xmax in ranges:
-                        if x0 >= xmin and x0 < xmax:
-                            cells[name].append(text)
-                            break
-                            
-                # Build item record
-                desc = ' '.join(cells.get('description') or []).strip()
-                if not desc:
-                    continue
-
-                # Parse code
-                code_text = ' '.join(cells.get('code') or []).strip()
-                code_match = re.search(r'(\d{3,15})', code_text) if code_text else None
-                item_code = code_match.group(1) if code_match else None
-        
-                # Parse qty
-                qty_text = ' '.join(cells.get('qty') or []).replace(',', '').strip()
-                qty_val = None
-                if qty_text:
-                    m = re.search(r'(\d{1,4})', qty_text)
-                    if m:
-                        try:
-                            qty_val = int(m.group(1))
-                        except Exception:
-                            qty_val = None
-
-                # Parse rate and value
-                def to_dec(s):
-                    try:
-                        return Decimal(re.sub(r'[^\d\.-]', '', s).replace(',', ''))
-                    except Exception:
-                        return None
-                        
-                rate_text = ' '.join(cells.get('rate') or []).strip()
-                rate_val = to_dec(rate_text) if rate_text else None
-        
-                value_text = ' '.join(cells.get('value') or []).strip()
-                value_val = to_dec(value_text) if value_text else None
-
-                # Parse unit/type
-                type_text = ' '.join(cells.get('type') or []).strip()
-                unit_val = None
-                if type_text:
-                    unit_match = re.search(r'\b(NOS|PCS|KG|HR|LTR|UNT|BOX|PCS|PC|NOS)\b', type_text, re.I)
-                    unit_val = unit_match.group(1).upper() if unit_match else type_text.upper()
-
-                # Skip non-item rows
-                if not desc and not value_val and not rate_val:
-                    continue
-
-                # Finalize item
-                items.append({
-                    'description': desc[:255] if desc else None,
-                    'qty': qty_val or 1,
-                    'unit': unit_val,
-                    'value': value_val,
-                    'rate': rate_val,
-                    'code': item_code,
-                })
-                
-        doc.close()
-        
-    except Exception as e:
-        logger.warning(f"Coordinate-based extraction failed: {e}")
-        
-    return items
-
 def parse_invoice_data(text: str) -> dict:
-    """Parse invoice data from extracted text using pattern matching.
-
-    Args:
-        text: Raw extracted text from PDF/image
-
-    Returns:
-        dict with extracted invoice data
-    """
+    """Parse invoice data from extracted text using pattern matching."""
     if not text or not text.strip():
         return {
-            'invoice_no': None,
-            'code_no': None,
-            'date': None,
-            'customer_name': None,
-            'address': None,
-            'phone': None,
-            'email': None,
-            'reference': None,
-            'subtotal': None,
-            'tax': None,
-            'total': None,
-            'items': [],
-            'payment_method': None,
-            'delivery_terms': None,
-            'remarks': None,
-            'attended_by': None,
-            'kind_attention': None
+            'invoice_no': None, 'code_no': None, 'date': None, 'customer_name': None,
+            'address': None, 'phone': None, 'email': None, 'reference': None,
+            'subtotal': None, 'tax': None, 'total': None, 'items': [],
+            'payment_method': None, 'delivery_terms': None, 'remarks': None,
+            'attended_by': None, 'kind_attention': None
         }
 
     normalized_text = text.replace('\r\n', '\n').replace('\r', '\n')
     lines = [line.strip() for line in normalized_text.split('\n') if line.strip()]
 
-    # Find the "Proforma Invoice" marker to start extraction from there
+    # Find the "Proforma Invoice" marker
     proforma_idx = -1
     for i, line in enumerate(lines):
         if re.search(r'Proforma\s+Invoice|PI\s*No|Code\s*No', line, re.I):
             proforma_idx = i
             break
-
-    # If no Proforma Invoice found, start from beginning but skip first few lines
     if proforma_idx == -1:
         proforma_idx = 0
 
-    # Use only lines from Proforma Invoice marker onwards
     extraction_lines = lines[proforma_idx:] if proforma_idx >= 0 else lines
 
-    # Extract seller information from original top of document (before Proforma)
-    seller_name = None
-    seller_address = None
-    seller_phone = None
-    seller_email = None
-    seller_tax_id = None
-    seller_vat_reg = None
+    # Extract basic fields
+    code_no = extract_code_no_enhanced(extraction_lines)
+    invoice_no = extract_invoice_no(extraction_lines)
+    customer_name = extract_customer_name(extraction_lines)
+    date_str = extract_date(extraction_lines)
+    address = extract_address(extraction_lines)
+    phone = extract_phone(extraction_lines)
+    email = extract_email(extraction_lines)
+    reference = extract_reference(extraction_lines)
 
-    try:
-        top_block = lines[:proforma_idx] if proforma_idx > 0 else lines[:8]
+    # Extract monetary values
+    subtotal = extract_monetary_value(extraction_lines, [r'Net\s*Value', r'Subtotal', r'Net\s*Amount'])
+    tax = extract_monetary_value(extraction_lines, [r'VAT', r'Tax', r'GST'])
+    total = extract_monetary_value(extraction_lines, [r'Gross\s*Value', r'Grand\s*Total', r'Total\s*Amount'])
 
-        seller_lines = top_block
-        if seller_lines:
-            seller_name = seller_lines[0] if seller_lines and seller_lines[0] else None
-            if len(seller_lines) > 1:
-                seller_address = ' '.join([ln for ln in seller_lines[1:] if ln])
+    # Extract line items - IMPROVED VERSION
+    items = extract_line_items_corrected(extraction_lines)
 
-            seller_block_text = '\n'.join(seller_lines)
-            phone_match = re.search(r'(?:Tel\.?|Telephone|Phone)[:\s]*([\+\d][\d\s\-/\(\)\,]{4,}\d)', seller_block_text, re.I)
-            if phone_match:
-                seller_phone = phone_match.group(1).strip()
+    return {
+        'invoice_no': invoice_no, 'code_no': code_no, 'date': date_str,
+        'customer_name': customer_name, 'phone': phone, 'email': email,
+        'address': address, 'reference': reference, 'subtotal': subtotal,
+        'tax': tax, 'total': total, 'items': items, 'payment_method': None,
+        'delivery_terms': None, 'remarks': None, 'attended_by': None,
+        'kind_attention': None, 'seller_name': None, 'seller_address': None,
+        'seller_phone': None, 'seller_email': None, 'seller_tax_id': None,
+        'seller_vat_reg': None
+    }
 
-            email_match = re.search(r'([\w\.-]+@[\w\.-]+\.\w+)', seller_block_text)
-            if email_match:
-                seller_email = email_match.group(1).strip()
-
-    except Exception:
-        pass
-
-    # Helper function to extract field values with improved cleaning
-    def extract_field_value(label_patterns, max_lines=3, clean_dates=True):
-        patterns = label_patterns if isinstance(label_patterns, list) else [label_patterns]
-
-        for pattern in patterns:
-            # Look for pattern in text
-            for i, line in enumerate(extraction_lines):
-                if re.search(pattern, line, re.I):
-                    # Try to extract value from same line
-                    match = re.search(rf'{pattern}\s*[:=]?\s*(.+)', line, re.I)
-                    if match:
-                        value = match.group(1).strip()
-                        if value:
-                            # Clean dates from value if requested
-                            if clean_dates:
-                                value = re.sub(r'\s*Date\s*[:=]?\s*\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}.*$', '', value, flags=re.I).strip()
-                            return value if value else None
-
-                    # Look in next lines
-                    for j in range(1, min(max_lines + 1, len(extraction_lines) - i)):
-                        next_line = extraction_lines[i + j].strip()
-                        if next_line and not re.match(r'^(?:Tel|Fax|Email|Address|Reference|PI|Date|Code|Cust|Ref|Del|Page)', next_line, re.I):
-                            # Clean dates from next line if requested
-                            if clean_dates:
-                                next_line = re.sub(r'\s*Date\s*[:=]?\s*\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}.*$', '', next_line, flags=re.I).strip()
-                            return next_line if next_line else None
-        return None
-
-    # Extract Code No - look for pattern with optional tabs/spaces
+def extract_code_no_enhanced(lines):
+    """Enhanced Code No extraction with multiple patterns and validation."""
     code_no = None
-    for line in extraction_lines:
-        # Match "Code No" or "Code" followed by a colon and value
-        match = re.search(r'(?:Code\s*(?:No|Number)?|Code\s*#)\s*[\t:]?\s*([A-Z0-9]{2,20})', line, re.I)
-        if match:
-            code_no = match.group(1).strip()
-            # Filter out likely non-codes (dates, labels)
-            if not re.match(r'^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$', code_no):
-                break
-            code_no = None
+    
+    # Multiple patterns to match different Code No formats
+    patterns = [
+        # Pattern 1: Explicit "Code No" with various separators
+        r'(?:Code\s*(?:No|Number|#)?)\s*[\t:\-]?\s*([A-Za-z0-9\-_/]{2,30})',
+        # Pattern 2: Customer Code patterns
+        r'(?:Customer\s*Code|Cust\.?\s*Code)\s*[\t:\-]?\s*([A-Za-z0-9\-_/]{2,30})',
+        # Pattern 3: Code at start of line followed by value
+        r'^(?:Code|COD)\s+([A-Za-z0-9\-_/]{2,30})(?:\s|$)',
+        # Pattern 4: Alphanumeric codes in specific positions
+        r'(?:^|\s)([A-Z]{1,4}\d{2,8}[A-Z]?)(?:\s|$)',
+        # Pattern 5: Simple code pattern after label
+        r'Code\s*:\s*([A-Za-z0-9\-_/]{2,30})',
+        # Pattern 6: Code No with parentheses or brackets
+        r'Code\s*No\s*[\[\(]?\s*([A-Za-z0-9\-_/]{2,30})\s*[\]\)]?',
+    ]
+    
+    for line in lines:
+        for pattern in patterns:
+            match = re.search(pattern, line, re.I)
+            if match:
+                candidate = match.group(1).strip()
+                
+                # Enhanced validation
+                if is_valid_code_no(candidate):
+                    code_no = candidate
+                    logger.info(f"Found Code No: {code_no} using pattern: {pattern}")
+                    return code_no
+    
+    # Fallback: Check in customer details section
+    if not code_no:
+        code_no = extract_code_no_from_customer_section(lines)
+    
+    return code_no
 
-    # Extract Invoice No (PI No)
-    invoice_no = None
-    for line in extraction_lines:
-        match = re.search(r'(?:PI|Invoice)\s*(?:No|Number|#|\.)\s*[\t:]?\s*([A-Z0-9\-]{3,30})', line, re.I)
-        if match:
-            invoice_no = match.group(1).strip()
-            if invoice_no and len(invoice_no) > 1:
-                break
-            invoice_no = None
+def is_valid_code_no(candidate):
+    """Validate if the extracted value is a legitimate code number."""
+    if not candidate or len(candidate) < 2:
+        return False
+        
+    # Exclude dates
+    if re.match(r'^\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}$', candidate):
+        return False
+        
+    # Exclude pure numbers that look like amounts or page numbers
+    if re.match(r'^\d+\.?\d*$', candidate):
+        if len(candidate) > 6:  # Too long for a code, probably amount or phone
+            return False
+        if len(candidate) <= 6 and int(candidate) > 100000:  # Likely amount
+            return False
+            
+    # Exclude common labels and false positives
+    invalid_patterns = [
+        r'^page\d*$', r'^\d+of\d+$', r'^total$', r'^subtotal$', 
+        r'^vat$', r'^tax$', r'^amount$', r'^invoice$', r'^proforma$',
+        r'^customer$', r'^name$', r'^address$', r'^phone$', r'^email$',
+        r'^ref$', r'^reference$', r'^date$', r'^terms$'
+    ]
+    
+    for pattern in invalid_patterns:
+        if re.match(pattern, candidate, re.I):
+            return False
+            
+    # Valid codes typically have mix of letters/numbers or specific formats
+    has_letters = bool(re.search(r'[A-Za-z]', candidate))
+    has_numbers = bool(re.search(r'\d', candidate))
+    
+    # Accept codes with letters, or numeric codes of reasonable length
+    if has_letters or (has_numbers and len(candidate) <= 8):
+        return True
+        
+    # Also accept codes that look like product codes (alphanumeric with dashes)
+    if re.match(r'^[A-Z0-9\-_/]{3,20}$', candidate, re.I):
+        return True
+        
+    return False
 
-    # Extract Customer Name - look for the value after "Customer Name" label
-    customer_name = None
-    for i, line in enumerate(extraction_lines):
+def extract_code_no_from_customer_section(lines):
+    """Extract Code No from customer information section."""
+    in_customer_section = False
+    customer_section_lines = []
+    
+    for line in lines:
+        # Detect customer section
+        if re.search(r'customer|client|cust\.?', line, re.I) and not re.search(r'seller|vendor', line, re.I):
+            in_customer_section = True
+            continue
+            
+        if in_customer_section:
+            # Stop when we hit other sections
+            if re.search(r'description|items|qty|rate|amount|invoice|proforma', line, re.I):
+                break
+                
+            customer_section_lines.append(line)
+            
+            # Look for code patterns in customer section
+            code_patterns = [
+                r'(?:code|ref)\s*[:#]?\s*([A-Z0-9\-_/]{3,20})',
+                r'^(?:code|ref)\s+([A-Z0-9\-_/]{3,20})',
+                r'([A-Z]{2,4}\d{3,8})',  # Pattern like AB12345
+            ]
+            
+            for pattern in code_patterns:
+                match = re.search(pattern, line, re.I)
+                if match:
+                    candidate = match.group(1).strip()
+                    if is_valid_code_no(candidate):
+                        return candidate
+                    
+    return None
+
+def extract_invoice_no(lines):
+    """Extract Invoice No from lines."""
+    for line in lines:
+        patterns = [
+            r'(?:PI|Invoice)\s*(?:No|Number|#|\.)\s*[:\-]?\s*([A-Z0-9\-]{3,30})',
+            r'(?:PI|Invoice)\s*[:\-]?\s*([A-Z0-9\-]{3,30})',
+            r'PI\s*[:]?\s*([A-Z0-9\-]{3,30})',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, line, re.I)
+            if match:
+                candidate = match.group(1).strip()
+                if candidate and len(candidate) >= 3:
+                    return candidate
+    return None
+
+def extract_customer_name(lines):
+    """Extract Customer Name from lines."""
+    for i, line in enumerate(lines):
         if re.search(r'Customer\s*Name', line, re.I):
-            # Try to extract from same line first
             match = re.search(r'Customer\s*Name\s*[\t:]?\s*(.+?)(?:\s+Date|$)', line, re.I)
             if match:
-                customer_name = match.group(1).strip()
-                if customer_name and not re.match(r'^\d{1,2}[/-]', customer_name):
-                    break
-            # If not in same line, check next line
-            elif i + 1 < len(extraction_lines):
-                next_line = extraction_lines[i + 1].strip()
+                name = match.group(1).strip()
+                if name and not re.match(r'^\d{1,2}[/-]', name):
+                    return name
+            elif i + 1 < len(lines):
+                next_line = lines[i + 1].strip()
                 if next_line and not re.match(r'^(?:Tel|Fax|Email|Phone|Address|Date)', next_line, re.I):
-                    customer_name = next_line
-                    break
-            customer_name = None
+                    return next_line
+    return None
 
-    # Extract Date - look for date pattern
-    date_str = None
-    for line in extraction_lines:
+def extract_date(lines):
+    """Extract Date from lines."""
+    for line in lines:
         match = re.search(r'(?:Date|Invoice\s*Date)\s*[\t:]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', line, re.I)
         if match:
-            date_str = match.group(1)
-            break
+            return match.group(1)
+    return None
 
-    # Extract Address - look for P.O. BOX or Address label
-    address = None
-    for i, line in enumerate(extraction_lines):
+def extract_address(lines):
+    """Extract Address from lines."""
+    for i, line in enumerate(lines):
         if re.search(r'(?:P\.?O\.?\s*B(?:OX)?|Address)', line, re.I):
-            # Extract value after the label
             match = re.search(r'(?:P\.?O\.?\s*B(?:OX)?|Address)\s*[\t:]?\s*(.+?)$', line, re.I)
             if match:
                 addr_line = match.group(1).strip()
-                # Clean up address line - remove trailing label indicators
-                addr_line = re.sub(r'\s+(?:Cust|Ref|Date|Del|Kind|Type|Invoice|PI|Code|Customer).*$', '', addr_line, flags=re.I).strip()
-                # Collect following lines that are part of address
                 address_parts = [addr_line] if addr_line else []
-                for j in range(i + 1, min(i + 4, len(extraction_lines))):
-                    next_line = extraction_lines[j].strip()
-                    # Stop at labeled fields or if line contains label patterns
-                    if re.match(r'^(?:Tel|Fax|Email|Phone|Cust|Ref|Date|Del|Kind|Type|Invoice|PI|Code|Customer)', next_line, re.I):
+                for j in range(i + 1, min(i + 6, len(lines))):
+                    next_line = lines[j].strip()
+                    if re.match(r'^(?:Tel|Fax|Email|Phone|Cust|Ref|Date|Del|Kind)', next_line, re.I):
                         break
-                    if re.search(r'(?:Cust|Ref)\s*(?:Ref|Date|:)', next_line, re.I):
-                        break
-                    # Filter out numeric dates
-                    if not re.match(r'^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$', next_line):
-                        if next_line and len(next_line) > 3:
-                            # Clean up any trailing label indicators from continuation lines too
-                            next_line = re.sub(r'\s+(?:Cust|Ref|Date|Del|Kind|Type).*$', '', next_line, flags=re.I).strip()
-                            if next_line:
-                                address_parts.append(next_line)
+                    if not re.match(r'^\d{1,2}[/-]', next_line):
+                        cleaned_line = re.sub(r'\s*(?:Cust\s*Ref|Ref\s*Date|Del\.?\s*Date)\s*:.*$', '', next_line, flags=re.I).strip()
+                        if cleaned_line:
+                            address_parts.append(cleaned_line)
+                
                 address = ' '.join(filter(None, address_parts))
-                # Final cleanup: remove any remaining mixed-in labels
-                address = re.sub(r'\s+(?:Cust\s*Ref|Ref\s*Date|Del\.?\s*Date)[\s:]*[^,]*', '', address, flags=re.I).strip()
+                address = re.sub(r'\s+(?:Cust\s*Ref|Ref\s*Date|Del\.?\s*Date)\s*:.*?(?=\s+[A-Z]|$)', '', address, flags=re.I)
+                address = re.sub(r'\s+', ' ', address).strip()
                 if address:
-                    break
+                    return address
+    return None
 
-    # Extract Phone
-    phone = None
-    for line in extraction_lines:
+def extract_phone(lines):
+    """Extract Phone from lines."""
+    for line in lines:
         tel_match = re.search(r'(?:Tel|Telephone|Phone)\s*[\t:]?\s*([\+\d][\d\s\-/\(\)\.\,]{5,})', line, re.I)
         if tel_match:
-            phone_candidate = tel_match.group(1).strip()
-            # Validate phone - must contain mostly digits and phone separators
-            # Extract just the digits to count
-            digits_only = re.sub(r'[^\d]', '', phone_candidate)
-            if len(digits_only) >= 7:
-                # Further clean - remove any trailing text after the phone number
-                # Phone typically ends with a digit, so remove anything after non-phone chars
-                phone_clean = re.sub(r'[\s\-/\(\)]+(\D.*)?$', '', phone_candidate).strip()
-                if phone_clean:
-                    phone = phone_clean
-                    break
-            phone = None
+            phone = tel_match.group(1).strip()
+            if phone and len(phone) >= 7:
+                return phone
+    return None
 
-    # Extract Email
-    email = None
-    for line in extraction_lines:
+def extract_email(lines):
+    """Extract Email from lines."""
+    for line in lines:
         email_match = re.search(r'([\w\.-]+@[\w\.-]+\.\w+)', line)
         if email_match:
-            email = email_match.group(1)
-            break
+            return email_match.group(1)
+    return None
 
-    # Extract Reference - look for "Reference", "Ref", "FOR T" patterns (not Cust Ref which is customer)
-    reference = None
-    for i, line in enumerate(extraction_lines):
-        # First try "FOR T" pattern which is used in these invoices
-        for_match = re.search(r'(?:FOR|Reference)\s*[:\t]?\s*(FOR\s+T\s+\d+\s+[A-Z]+)', line, re.I)
-        if for_match:
-            reference = for_match.group(1).strip()
-            if reference:
-                break
-        # Fallback to general reference pattern
-        match = re.search(r'(?:^|\s)(?:Reference|Ref\.?)\s*[\t:]?\s*(.+?)(?:\s+Date|$)', line, re.I)
-        if match:
-            reference = match.group(1).strip()
-            # Filter out dates and Cust Ref (which belongs to customer address)
-            if reference and not re.match(r'^\d{1,2}[/-]', reference) and not re.match(r'(?:Cust|Ref)\s*Ref', reference, re.I):
-                # Clean up any trailing date-like text
-                reference = re.sub(r'\s*(?:Date|Ref\s*Date).*$', '', reference, flags=re.I).strip()
-                if reference:
-                    break
-            reference = None
+def extract_reference(lines):
+    """Extract Reference from lines."""
+    for line in lines:
+        patterns = [
+            r'(?:Reference|Cust\s*Ref|Ref\.?)\s*[:\-]?\s*(.+?)(?:\s+Date|$)',
+            r'Ref\s*[:\-]?\s*([A-Z0-9\s\-]{3,30})',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, line, re.I)
+            if match:
+                candidate = match.group(1).strip()
+                if candidate and not re.match(r'^\d{1,2}[/-]', candidate):
+                    candidate = re.sub(r'\s*(?:Date|Ref\s*Date|Del\s*Date).*$', '', candidate, flags=re.I).strip()
+                    if candidate and len(candidate) >= 2:
+                        return candidate
+    return None
 
-    # Extract monetary values (use extraction_lines that start from Proforma Invoice)
-    def find_amount(label_patterns):
-        for pattern in label_patterns:
-            for line in extraction_lines:
-                match = re.search(rf'{pattern}\s*[:=]?\s*(?:TSH|TZS|UGX)?\s*([\d,]+\.?\d*)', line, re.I)
-                if match:
-                    return match.group(1)
-        return None
+def extract_monetary_value(lines, patterns):
+    """Extract monetary value from lines."""
+    for pattern in patterns:
+        for line in lines:
+            match = re.search(rf'{pattern}\s*[:=]?\s*(?:TSH|TZS|UGX)?\s*([\d,]+\.?\d*)', line, re.I)
+            if match:
+                try:
+                    cleaned = re.sub(r'[^\d\.]', '', match.group(1).replace(',', ''))
+                    return Decimal(cleaned) if cleaned else None
+                except:
+                    pass
+    return None
 
-    def to_decimal(s):
-        try:
-            if s:
-                cleaned = re.sub(r'[^\d\.]', '', s.replace(',', ''))
-                return Decimal(cleaned)
-        except Exception:
-            pass
-        return None
-
-    subtotal = to_decimal(find_amount([r'Net\s*Value', r'Subtotal', r'Net\s*Amount']))
-    tax = to_decimal(find_amount([r'VAT', r'Tax', r'GST']))
-    total = to_decimal(find_amount([r'Gross\s*Value', r'Grand\s*Total', r'Total\s*Amount']))
-
-    # Extract line items (use text starting from Proforma Invoice onwards)
-    extraction_text = '\n'.join(extraction_lines)
-    items = extract_line_items_from_text(extraction_text)
-
-    # Extract additional fields
-    payment_method = extract_field_value([r'Payment', r'Payment\s*Method'])
-    delivery_terms = extract_field_value([r'Delivery', r'Delivery\s*Terms'])
-    remarks = extract_field_value([r'Remarks', r'Notes', r'NOTE'])
-    attended_by = extract_field_value([r'Attended\s*By'])
-    kind_attention = extract_field_value([r'Kind\s*Attention'])
-
-    return {
-        'invoice_no': invoice_no,
-        'code_no': code_no,
-        'date': date_str,
-        'customer_name': customer_name,
-        'phone': phone,
-        'email': email,
-        'address': address,
-        'reference': reference,
-        'subtotal': subtotal,
-        'tax': tax,
-        'total': total,
-        'items': items,
-        'payment_method': payment_method,
-        'delivery_terms': delivery_terms,
-        'remarks': remarks,
-        'attended_by': attended_by,
-        'kind_attention': kind_attention,
-        'seller_name': seller_name,
-        'seller_address': seller_address,
-        'seller_phone': seller_phone,
-        'seller_email': seller_email,
-        'seller_tax_id': seller_tax_id,
-        'seller_vat_reg': seller_vat_reg
-    }
-
-def extract_line_items_from_text(text):
-    """Extract line items from text using pattern matching.
-    Handles multi-line descriptions by tracking Sr No patterns.
+def extract_line_items_corrected(lines):
+    """
+    CORRECTED line item extraction with proper column separation.
     """
     items = []
-    lines = text.split('\n')
-    cleaned_lines = [line.strip() for line in lines if line.strip()]
-
-    # Find item section header
-    item_section_start = -1
-    for i, line in enumerate(cleaned_lines):
-        keyword_count = sum([
-            1 if re.search(r'\b(?:Sr|S\.N|Serial|No\.?)\b', line, re.I) else 0,
-            1 if re.search(r'\b(?:Item|Code|Product)\b', line, re.I) else 0,
-            1 if re.search(r'\b(?:Description|Desc)\b', line, re.I) else 0,
-            1 if re.search(r'\b(?:Qty|Quantity)\b', line, re.I) else 0,
-            1 if re.search(r'\b(?:Rate|Price|Value|Amount)\b', line, re.I) else 0,
-        ])
-        if keyword_count >= 3:
-            item_section_start = i
+    
+    # Find the item table section
+    table_start = -1
+    for i, line in enumerate(lines):
+        # Comprehensive header detection
+        header_keywords = [
+            r'\b(Sr|S\.?No?\.?|No\.?|#)\b',
+            r'\b(Item\s*Code|Code|Item)\b', 
+            r'\b(Description|Desc)\b',
+            r'\b(Type|Unit)\b',
+            r'\b(Qty|Quantity)\b',
+            r'\b(Rate|Price|Unit\s*Price)\b',
+            r'\b(Value|Amount|Total)\b'
+        ]
+        
+        keyword_count = sum(1 for pattern in header_keywords if re.search(pattern, line, re.I))
+        if keyword_count >= 4:
+            table_start = i
+            logger.info(f"Found item table header at line {i}: {line}")
             break
-
-    if item_section_start == -1:
+    
+    if table_start == -1:
+        logger.warning("No item table header found")
         return items
-
-    # Process item lines - use a state machine to handle multi-line descriptions
-    i = item_section_start + 1
-    while i < len(cleaned_lines):
-        line = cleaned_lines[i]
-
-        # Stop at totals section
-        if re.search(r'(Net\s*Value|Gross\s*Value|Grand\s*Total|Total\s*:|Page\s*\d+|Existing\s*Customer)', line, re.I):
+    
+    # Process lines after header
+    i = table_start + 1
+    current_item_lines = []
+    current_item_number = None
+    
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # Stop at totals or section breaks
+        if re.search(r'(Net\s*Value|Gross\s*Value|Grand\s*Total|Total\s*Amount|Sub.*Total|Page\s*\d+|Customer\s*Information|Thank|Notes?)', line, re.I):
+            logger.info(f"Stopping at section break: {line}")
             break
-
-        # Skip pure header or empty-like lines
-        if re.search(r'^\s*(Sr|Item|Code|Description|Type|Qty|Rate|Value|Unit|Price|Amount)\s*$', line, re.I):
+        
+        # Skip empty lines
+        if not line:
             i += 1
             continue
-
-        # Check if line starts with Sr No (new item)
-        sr_match = re.match(r'^(\d{1,2})\s+', line)
-        if sr_match:
-            # Parse the complete item (may span multiple lines)
-            item, lines_consumed = parse_item_multiline(cleaned_lines, i)
-            if item and item.get('description'):
-                items.append(item)
-            i += lines_consumed
-        else:
-            i += 1
-
+        
+        # Check if this line starts a new item (starts with a number followed by item code pattern)
+        item_start_match = re.match(r'^(\d+)\.?\s+(\d{4,15})\s+(.+)$', line)
+        if item_start_match:
+            # If we have a current item being built, save it first
+            if current_item_lines and current_item_number is not None:
+                parsed_item = parse_item_complete(current_item_lines, current_item_number)
+                if parsed_item and parsed_item.get('description'):
+                    items.append(parsed_item)
+                    logger.info(f"Completed item {len(items)}: {parsed_item}")
+            
+            # Start new item
+            current_item_number = item_start_match.group(1)
+            item_code = item_start_match.group(2)
+            rest_of_line = item_start_match.group(3)
+            current_item_lines = [{'code': item_code, 'line': rest_of_line}]
+            
+        elif re.match(r'^(\d+)\.?\s+(.+)$', line) and not re.match(r'^(\d+)\.?\s+(\d{4,15})\s+', line):
+            # This line starts with a number but doesn't have an item code pattern
+            item_simple_match = re.match(r'^(\d+)\.?\s+(.+)$', line)
+            if item_simple_match:
+                # If we have a current item being built, save it first
+                if current_item_lines and current_item_number is not None:
+                    parsed_item = parse_item_complete(current_item_lines, current_item_number)
+                    if parsed_item and parsed_item.get('description'):
+                        items.append(parsed_item)
+                        logger.info(f"Completed item {len(items)}: {parsed_item}")
+                
+                # Start new item without predefined code
+                current_item_number = item_simple_match.group(1)
+                rest_of_line = item_simple_match.group(2)
+                current_item_lines = [{'code': None, 'line': rest_of_line}]
+        
+        elif current_item_lines:
+            # This is a continuation line for the current item
+            current_item_lines.append({'code': None, 'line': line})
+        
+        i += 1
+    
+    # Don't forget the last item
+    if current_item_lines and current_item_number is not None:
+        parsed_item = parse_item_complete(current_item_lines, current_item_number)
+        if parsed_item and parsed_item.get('description'):
+            items.append(parsed_item)
+            logger.info(f"Completed final item {len(items)}: {parsed_item}")
+    
+    logger.info(f"Total items extracted: {len(items)}")
     return items
 
-def parse_item_multiline(all_lines, start_idx):
-    """Parse a single item that may span multiple lines.
-
-    Returns:
-        tuple: (item_dict, lines_consumed)
+def parse_item_complete(item_lines, item_number):
     """
-    if start_idx >= len(all_lines):
-        return None, 0
-
-    current_line = all_lines[start_idx]
-
-    # Extract Sr No
-    sr_match = re.match(r'^(\d{1,2})\s+', current_line)
-    if not sr_match:
-        return None, 1
-
-    sr_no = int(sr_match.group(1))
-    rest_of_line = current_line[len(sr_match.group(0)):].strip()
-
-    # Parse the current line
-    item_code = None
-    description_parts = []
-    unit = None
+    Parse a complete item with proper column separation and value calculation.
+    """
+    if not item_lines:
+        return None
+    
+    # Extract item code from first line if available
+    item_code = item_lines[0]['code']
+    
+    # Combine all lines into one text block
+    full_text = ' '.join([line['line'] for line in item_lines])
+    
+    # Try to extract item code from the text if not already found
+    if not item_code:
+        code_match = re.search(r'\b(\d{4,15})\b', full_text)
+        if code_match:
+            item_code = code_match.group(1)
+            logger.info(f"Extracted item code from text: {item_code}")
+    
+    # IMPROVED PATTERN MATCHING - Look for complete column structure
+    # Pattern: Description Unit Qty Rate Value
+    pattern_complete = r'^(.+?)\s+(PCS|NOS|KG|HR|LTR|PC|UNT|BOX|SET|UNIT|PIECES|TYRE|TIRE)\s+(\d+)\s+([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})$'
+    match_complete = re.search(pattern_complete, full_text)
+    
+    if match_complete:
+        description = match_complete.group(1).strip()
+        unit = match_complete.group(2).upper()
+        qty = int(match_complete.group(3))
+        rate = Decimal(match_complete.group(4).replace(',', ''))
+        value = Decimal(match_complete.group(5).replace(',', ''))
+        
+        # Remove item code from description if present
+        if item_code and item_code in description:
+            description = description.replace(item_code, '', 1).strip()
+        
+        logger.info(f"Complete pattern match - Code: {item_code}, Desc: {description[:50]}, Unit: {unit}, Qty: {qty}, Rate: {rate}, Value: {value}")
+        
+        return {
+            'code': item_code,
+            'description': clean_description(description),
+            'unit': unit,
+            'qty': qty,
+            'rate': rate,
+            'value': value
+        }
+    
+    # Pattern for items with unit after description
+    pattern_with_unit = r'^(.+?)\s+(PCS|NOS|KG|HR|LTR|PC|UNT|BOX|SET|UNIT|PIECES|TYRE|TIRE)\s+(\d+)\s+([\d,]+\.?\d{2})'
+    match_with_unit = re.search(pattern_with_unit, full_text)
+    
+    if match_with_unit:
+        description = match_with_unit.group(1).strip()
+        unit = match_with_unit.group(2).upper()
+        qty = int(match_with_unit.group(3))
+        rate = Decimal(match_with_unit.group(4).replace(',', ''))
+        
+        # Calculate value
+        value = rate * Decimal(qty)
+        
+        # Remove item code from description if present
+        if item_code and item_code in description:
+            description = description.replace(item_code, '', 1).strip()
+        
+        logger.info(f"Unit pattern match - Code: {item_code}, Desc: {description[:50]}, Unit: {unit}, Qty: {qty}, Rate: {rate}, Value: {value}")
+        
+        return {
+            'code': item_code,
+            'description': clean_description(description),
+            'unit': unit,
+            'qty': qty,
+            'rate': rate,
+            'value': value
+        }
+    
+    # Pattern for basic quantity and rate
+    pattern_basic = r'(\d+)\s+([\d,]+\.?\d{2})'
+    matches_basic = list(re.finditer(pattern_basic, full_text))
+    
+    if len(matches_basic) >= 2:
+        # Use the first match for quantity, second for rate
+        qty = int(matches_basic[0].group(1))
+        rate = Decimal(matches_basic[1].group(2).replace(',', ''))
+        value = rate * Decimal(qty)
+        
+        # Extract unit
+        unit = None
+        unit_match = re.search(r'\b(PCS|NOS|KG|HR|LTR|PC|UNT|BOX|SET|UNIT|PIECES|TYRE|TIRE)\b', full_text, re.I)
+        if unit_match:
+            unit = unit_match.group(1).upper()
+        
+        # Build description by removing numbers, units, and codes
+        description = full_text
+        
+        # Remove item code
+        if item_code and item_code in description:
+            description = description.replace(item_code, '', 1).strip()
+        
+        # Remove quantities and rates
+        for match in reversed(matches_basic):
+            description = description.replace(match.group(0), '', 1).strip()
+        
+        # Remove unit
+        if unit:
+            description = re.sub(r'\b' + re.escape(unit) + r'\b', '', description, flags=re.I).strip()
+        
+        # Remove percentages and other noise
+        description = re.sub(r'\d+\.?\d*\%', '', description).strip()
+        
+        logger.info(f"Basic pattern match - Code: {item_code}, Desc: {description[:50]}, Unit: {unit}, Qty: {qty}, Rate: {rate}, Value: {value}")
+        
+        return {
+            'code': item_code,
+            'description': clean_description(description),
+            'unit': unit,
+            'qty': qty,
+            'rate': rate,
+            'value': value
+        }
+    
+    # Fallback: Extract numbers and try to make sense of them
     numbers = []
-    percentages = []
-
-    # Extract item code (sequence of 6+ digits at start, or alphanumeric code)
-    code_match = re.match(r'^(\d{6,15}|[A-Z0-9]{3,15})\s+', rest_of_line)
-    if code_match:
-        item_code = code_match.group(1)
-        rest_of_line = rest_of_line[len(code_match.group(0)):].strip()
-
-    # Find unit type in the line
-    unit_keywords = r'\b(PCS|NOS|KG|HR|LTR|PIECES|UNITS?|KIT|BOX|CASE|SETS?|PC|UNT|KTS|BAG|BUNDLE|PACK|CYLINDER|LITRE|TYRE|TIRE|TL|LT)\b'
-    unit_match = re.search(unit_keywords, rest_of_line, re.I)
-
-    # Extract all numbers from the line, separating percentages
-    number_matches = re.finditer(r'(\d+(?:,\d+)*(?:\.\d+)?)', rest_of_line)
+    number_matches = re.finditer(r'([\d,]+\.?\d*)', full_text)
     for match in number_matches:
-        end_pos = match.end()
-        if end_pos < len(rest_of_line) and rest_of_line[end_pos:end_pos+2].strip().startswith('%'):
-            try:
-                pct = float(match.group(1).replace(',', ''))
-                percentages.append(pct)
-            except ValueError:
-                pass
-        else:
-            try:
-                num = float(match.group(1).replace(',', ''))
-                numbers.append(num)
-            except ValueError:
-                continue
-
-    # Extract description (text before unit or numbers)
+        try:
+            num_str = match.group(1).replace(',', '')
+            num = float(num_str)
+            numbers.append({
+                'value': num,
+                'original': match.group(1),
+                'is_integer': num == int(num) and num < 10000
+            })
+        except:
+            continue
+    
+    # Extract unit
+    unit = None
+    unit_match = re.search(r'\b(PCS|NOS|KG|HR|LTR|PC|UNT|BOX|SET|UNIT|PIECES|TYRE|TIRE)\b', full_text, re.I)
     if unit_match:
-        description = rest_of_line[:unit_match.start()].strip()
         unit = unit_match.group(1).upper()
+    
+    # Identify quantities and values
+    quantities = [n for n in numbers if n['is_integer'] and 0 < n['value'] < 1000]
+    potential_rates = [n for n in numbers if not n['is_integer'] or n['value'] >= 1000]
+    
+    # Determine quantity and rate
+    quantity = 1
+    rate = None
+    value = None
+    
+    if quantities and potential_rates:
+        # Use smallest integer as quantity, largest number as potential value
+        quantity = int(min([q['value'] for q in quantities]))
+        largest_value = max([r['value'] for r in potential_rates])
+        
+        # Check if largest value makes sense as total value
+        if largest_value > 1000:  # Likely a total value
+            value = Decimal(str(largest_value))
+            rate = value / Decimal(quantity)
+        else:
+            rate = Decimal(str(largest_value))
+            value = rate * Decimal(quantity)
+    elif quantities:
+        quantity = int(min([q['value'] for q in quantities]))
+        # No rate found, set default
+        rate = Decimal('0')
+        value = Decimal('0')
+    elif potential_rates:
+        # Only rates found, assume quantity 1
+        rate = Decimal(str(max([r['value'] for r in potential_rates])))
+        value = rate
     else:
-        # Remove trailing numbers from description
-        description = re.sub(r'\s+\d+(?:,\d+)*(?:\.\d+)?\s*$', '', rest_of_line).strip()
-
-    description_parts.append(description)
-
-    # Look ahead for continuation lines (lines that don't start with Sr No)
-    lines_consumed = 1
-    next_idx = start_idx + 1
-
-    while next_idx < len(all_lines):
-        next_line = all_lines[next_idx]
-
-        # Stop if we hit another Sr No (next item) - this is KEY
-        if re.match(r'^(\d{1,2})\s+', next_line):
-            break
-
-        # Stop if we hit a summary line or section marker
-        if re.search(r'(Net\s*Value|Gross\s*Value|Grand\s*Total|Total\s*:|Page\s*\d+|Existing\s*Customer|Customer\s*Information|Invoice\s*Date|Date)', next_line, re.I):
-            break
-
-        # Stop if we hit a blank or header-like line
-        if not next_line.strip() or re.search(r'^\s*(?:Sr|S\.N|Item|Code|Description|Type|Qty|Rate|Value|Unit|Price|Amount|#)\s*$', next_line, re.I):
-            break
-
-        # CONSERVATIVE APPROACH: Only add if line looks like description (not a number/quantity line)
-        # Check if the entire line is mostly text (not just numbers and units)
-        stripped = next_line.strip()
-
-        # Don't add lines that start with a number followed by unit (like "4 1,037,400.00")
-        if re.match(r'^\d+\s+[\d\,\.]+', stripped):
-            break
-
-        # Don't add lines that are just percentages or decimals
-        if re.match(r'^[\d\.\%]+$', stripped):
-            break
-
-        # Check if this line is just a qty/unit/price line that got split
-        # Pattern: number followed by unit keyword or number followed by amount
-        if re.match(r'^\d+\s+(?:PCS|NOS|UNT|KG|LTR|BOX|CASE)\b', stripped, re.I):
-            # This is likely a unit/qty line, extract unit info
-            unit_line_match = re.search(r'\b(PCS|NOS|KG|HR|LTR|PIECES|UNITS?|KIT|BOX|CASE|SETS?|PC|UNT|KTS|BAG|BUNDLE|PACK|CYLINDER|LITRE)\b', stripped, re.I)
-            if unit_line_match and not unit:
-                unit = unit_line_match.group(1).upper()
-            # Don't add to description
-            break
-
-        # This looks like a real description continuation - add it
-        description_parts.append(next_line)
-        lines_consumed += 1
-        next_idx += 1
-
-    # Combine multi-line description and limit length
-    full_description = ' '.join(filter(None, description_parts)).strip()
-    full_description = re.sub(r'\s+', ' ', full_description)[:255]
-
-    if not full_description or len(full_description) < 2:
-        return None, lines_consumed
-
-    # Build item record
-    item = {
-        'description': full_description,
+        # No numbers found
+        rate = Decimal('0')
+        value = Decimal('0')
+    
+    # Build description
+    description = full_text
+    
+    # Remove item code
+    if item_code and item_code in description:
+        description = description.replace(item_code, '', 1).strip()
+    
+    # Remove numbers
+    for num_info in sorted(numbers, key=lambda x: len(x['original']), reverse=True):
+        description = description.replace(num_info['original'], '', 1).strip()
+    
+    # Remove unit
+    if unit:
+        description = re.sub(r'\b' + re.escape(unit) + r'\b', '', description, flags=re.I).strip()
+    
+    # Remove percentages
+    description = re.sub(r'\d+\.?\d*\%', '', description).strip()
+    
+    if not description or len(description) < 2:
+        return None
+    
+    logger.info(f"Fallback extraction - Code: {item_code}, Desc: {description[:50]}, Unit: {unit}, Qty: {quantity}, Rate: {rate}, Value: {value}")
+    
+    return {
         'code': item_code,
+        'description': clean_description(description),
         'unit': unit,
-        'qty': 1,
-        'rate': None,
-        'value': None
+        'qty': quantity,
+        'rate': rate,
+        'value': value
     }
 
-    # Assign numbers intelligently - be more careful about which is qty vs rate
-    if len(numbers) == 1:
-        # Single number - likely the value/amount
-        item['value'] = Decimal(str(numbers[0]))
-    elif len(numbers) == 2:
-        # Two numbers - first is qty, second is value (or vice versa)
-        # Try to detect: if first is small integer (1-999), it's qty
-        if numbers[0] == int(numbers[0]) and 0 < numbers[0] < 1000 and numbers[1] > numbers[0]:
-            item['qty'] = int(numbers[0])
-            item['value'] = Decimal(str(numbers[1]))
-        else:
-            # Otherwise assume the larger is value
-            item['value'] = Decimal(str(max(numbers)))
-    elif len(numbers) >= 3:
-        # Multiple numbers - typically: qty, rate, value (or code, qty, rate, value)
-        # Find the largest number (usually the value)
-        max_num = max(numbers)
-        min_num = min(numbers)
-
-        # Try to find qty: should be a small integer between 1 and 1000
-        qty_candidate = None
-        rate_candidate = None
-
-        for num in numbers:
-            if num == int(num) and 0 < num < 1000 and num < max_num:
-                qty_candidate = int(num)
-                break
-
-        if qty_candidate:
-            item['qty'] = qty_candidate
-            item['value'] = Decimal(str(max_num))
-            # Find rate (should be a value that makes sense as unit price)
-            for num in numbers:
-                if num != qty_candidate and num != max_num and num > 0:
-                    rate_candidate = num
-                    break
-            if rate_candidate:
-                item['rate'] = Decimal(str(rate_candidate))
-            elif qty_candidate > 0 and max_num > 0:
-                item['rate'] = Decimal(str(max_num / qty_candidate))
-        else:
-            # No clear qty found, assume last number is value
-            item['value'] = Decimal(str(numbers[-1]))
-            if len(numbers) > 1:
-                item['rate'] = Decimal(str(numbers[-2]))
-
-    return item, lines_consumed
+def clean_description(description):
+    """Clean and normalize description text."""
+    if not description:
+        return ""
+    
+    # Remove extra whitespace
+    description = re.sub(r'\s+', ' ', description).strip()
+    
+    # Remove common prefixes/suffixes that might be left after number removal
+    description = re.sub(r'^[-\s]*|[-\s]*$', '', description)
+    
+    # Remove any remaining isolated numbers or symbols
+    description = re.sub(r'\s+[-\*\.]\s+', ' ', description)
+    
+    # Remove percentages completely
+    description = re.sub(r'\d+\.?\d*\%', '', description).strip()
+    
+    # Remove common noise words
+    noise_words = ['FOR', 'CAR', 'TYRES', 'RIMS', 'SMALL']
+    for word in noise_words:
+        description = re.sub(r'\b' + word + r'\b', '', description, flags=re.I).strip()
+    
+    return description
 
 def extract_from_bytes(file_bytes, filename: str = '') -> dict:
-    """Main entry point: extract text from file and parse invoice data.
-
-    Args:
-        file_bytes: Raw bytes of uploaded file
-        filename: Original filename (to detect file type)
-
-    Returns:
-        dict with extraction results
-    """
+    """Main entry point: extract text from file and parse invoice data."""
     if not file_bytes:
         return {
-            'success': False,
-            'error': 'empty_file',
-            'message': 'File is empty. Please upload a valid PDF file.',
-            'ocr_available': False,
-            'header': {},
-            'items': [],
-            'raw_text': ''
+            'success': False, 'error': 'empty_file', 'message': 'File is empty.',
+            'ocr_available': False, 'header': {}, 'items': [], 'raw_text': ''
         }
 
-    # Detect file type
     is_pdf = filename.lower().endswith('.pdf') or (len(file_bytes) > 4 and file_bytes[:4] == b'%PDF')
     is_image = filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.tiff', '.bmp'))
 
     if is_image:
         return {
-            'success': False,
-            'error': 'image_file_not_supported',
-            'message': 'Image files are not supported. Please convert to PDF or enter details manually.',
-            'ocr_available': False,
-            'header': {},
-            'items': [],
-            'raw_text': ''
+            'success': False, 'error': 'image_file_not_supported', 
+            'message': 'Image files are not supported.', 'ocr_available': False,
+            'header': {}, 'items': [], 'raw_text': ''
         }
 
     if not is_pdf:
         return {
-            'success': False,
-            'error': 'unsupported_file_type',
-            'message': 'Please upload a PDF file.',
-            'ocr_available': False,
-            'header': {},
-            'items': [],
-            'raw_text': ''
+            'success': False, 'error': 'unsupported_file_type',
+            'message': 'Please upload a PDF file.', 'ocr_available': False,
+            'header': {}, 'items': [], 'raw_text': ''
         }
 
     # Extract text from PDF
@@ -847,36 +725,21 @@ def extract_from_bytes(file_bytes, filename: str = '') -> dict:
     except Exception as e:
         logger.error(f"PDF text extraction failed: {e}")
         return {
-            'success': False,
-            'error': 'pdf_extraction_failed',
-            'message': f'Could not extract text from PDF: {str(e)}',
-            'ocr_available': False,
-            'header': {},
-            'items': [],
-            'raw_text': ''
+            'success': False, 'error': 'pdf_extraction_failed',
+            'message': f'Could not extract text from PDF: {str(e)}', 'ocr_available': False,
+            'header': {}, 'items': [], 'raw_text': ''
         }
 
-    # Validate that we got text
     if not text or not text.strip():
         return {
-            'success': False,
-            'error': 'no_text_extracted',
-            'message': 'No readable text found in PDF.',
-            'ocr_available': False,
-            'header': {},
-            'items': [],
-            'raw_text': ''
+            'success': False, 'error': 'no_text_extracted',
+            'message': 'No readable text found in PDF.', 'ocr_available': False,
+            'header': {}, 'items': [], 'raw_text': ''
         }
 
     # Parse extracted text to structured invoice data
     try:
         parsed = parse_invoice_data(text)
-
-        # Try coordinate-based extraction for items
-        coord_items = _extract_items_with_coordinates(file_bytes)
-        
-        # Use coordinate-based items if available, otherwise use text-based
-        final_items = coord_items if coord_items else parsed.get('items', [])
 
         # Prepare header
         header = {
@@ -900,7 +763,7 @@ def extract_from_bytes(file_bytes, filename: str = '') -> dict:
 
         # Format items
         formatted_items = []
-        for item in final_items:
+        for item in parsed.get('items', []):
             formatted_items.append({
                 'description': item.get('description', ''),
                 'qty': item.get('qty', 1),
@@ -949,23 +812,9 @@ def extract_from_bytes(file_bytes, filename: str = '') -> dict:
         }
 
 def build_invoice_json(parsed: dict) -> dict:
-    """Build standardized invoice JSON from parsed data.
+    """Build standardized invoice JSON from parsed data."""
+    invoice_type = 'Proforma Invoice' if parsed.get('invoice_no', '').upper().startswith('PI') else 'Invoice'
     
-    Args:
-        parsed: Parsed invoice data from parse_invoice_data
-        
-    Returns:
-        Standardized invoice JSON structure
-    """
-    # Determine invoice type
-    invoice_type = ''
-    inv_no = parsed.get('invoice_no') or ''
-    if inv_no and inv_no.upper().startswith('PI'):
-        invoice_type = 'Proforma Invoice'
-    else:
-        invoice_type = 'Invoice'
-
-    # Seller details
     seller_details = {
         'name': parsed.get('seller_name') or '',
         'address': parsed.get('seller_address') or '',
@@ -974,7 +823,6 @@ def build_invoice_json(parsed: dict) -> dict:
         'vat_number': parsed.get('seller_vat_reg') or ''
     }
 
-    # Customer details
     customer_details = {
         'code': parsed.get('code_no') or '',
         'name': parsed.get('customer_name') or '',
@@ -984,7 +832,6 @@ def build_invoice_json(parsed: dict) -> dict:
         'email': parsed.get('email') or ''
     }
 
-    # Items
     items_out = []
     for idx, item in enumerate(parsed.get('items', []), 1):
         items_out.append({
@@ -998,7 +845,6 @@ def build_invoice_json(parsed: dict) -> dict:
             'vat_percent': ''
         })
 
-    # Totals
     totals = {
         'sub_total': float(parsed.get('subtotal')) if parsed.get('subtotal') else '',
         'vat_amount': float(parsed.get('tax')) if parsed.get('tax') else '',
@@ -1007,17 +853,15 @@ def build_invoice_json(parsed: dict) -> dict:
         'grand_total': float(parsed.get('total')) if parsed.get('total') else ''
     }
 
-    # Calculate VAT percent if possible
     if totals['sub_total'] and totals['vat_amount'] and totals['sub_total'] > 0:
         try:
             totals['vat_percent'] = round((totals['vat_amount'] / totals['sub_total']) * 100, 2)
-        except (ZeroDivisionError, TypeError):
+        except:
             totals['vat_percent'] = ''
 
-    # Invoice metadata
     invoice_metadata = {
         'invoice_type': invoice_type,
-        'invoice_number': inv_no,
+        'invoice_number': parsed.get('invoice_no') or '',
         'customer_reference': parsed.get('reference') or '',
         'reference_date': '',
         'page': '1',
@@ -1036,30 +880,41 @@ def build_invoice_json(parsed: dict) -> dict:
         'footer_notes': parsed.get('remarks') or ''
     }
 
-# Example usage
+# Example usage and testing
 if __name__ == "__main__":
-    # Example of how to use the functions
-    def example_usage():
-        # Read a PDF file
-        with open('invoice.pdf', 'rb') as f:
-            file_bytes = f.read()
+    def test_extraction():
+        """Test the extraction with sample data."""
+        test_text = """
+        Proforma Invoice
+        PI No: 1765632
+        Code No: A01696
+        Date: 25/10/2025
+        Customer Name: STATEOIL TANZANIA LIMITED
         
-        # Extract data
-        result = extract_from_bytes(file_bytes, 'invoice.pdf')
+        P.O. BOX 15950 DAR ES SALAAM TANZANIA
         
-        if result['success']:
-            print("Extraction successful!")
-            print(f"Invoice No: {result['header']['invoice_no']}")
-            print(f"Customer: {result['header']['customer_name']}")
-            print(f"Total: {result['header']['total']}")
-            print(f"Items: {len(result['items'])}")
-            
-            # Build standardized JSON
-            invoice_json = build_invoice_json(parse_invoice_data(result['raw_text']))
-            print("\nStandardized JSON:")
-            print(json.dumps(invoice_json, indent=2, default=str))
-        else:
-            print(f"Extraction failed: {result['message']}")
+        Sr  Item Code  Description                                                             Type  Qty  Rate (TSH)   Value (TSH)
+        1   2132004135 BF GOODRICH TYRE LT265/65R17 116/113S TL ALL-TERRAIN T/A KO3 LRD RWL GO PCS   4    1,037,400.00 4,149,600.00
+        2   3373119002 VALVE (1214 TR 414) FOR CAR TUBELESS TYRES                              PCS   4    1,300.00     5,200.00
+        3   21004      WHEEL BALANCE ALLOY RIMS                                                PCS   4    12,712.00    50,848.00
+        4   21019      WHEEL ALIGNMENT SMALL                                                   UNT   1    50,848.00    50,848.00
+        
+        Net Value: 4,256,496.00
+        VAT: 765,169.28
+        Grand Total: 5,021,665.28
+        """
+        
+        lines = [line.strip() for line in test_text.split('\n') if line.strip()]
+        parsed = parse_invoice_data(test_text)
+        print("Test Data Extraction Results:")
+        print(f"Invoice No: {parsed['invoice_no']}")
+        print(f"Code No: {parsed['code_no']}")
+        print(f"Customer: {parsed['customer_name']}")
+        print(f"Total: {parsed['total']}")
+        print(f"Items: {len(parsed['items'])}")
+        
+        for i, item in enumerate(parsed['items'], 1):
+            print(f"  {i}. {item['description']}")
+            print(f"     Code: {item['code']}, Unit: {item['unit']}, Qty: {item['qty']}, Rate: {item['rate']}, Value: {item['value']}")
     
-    # Uncomment to test
-    # example_usage()
+    test_extraction()
