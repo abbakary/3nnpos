@@ -339,7 +339,6 @@ def started_orders_dashboard(request):
 
     # Calculate statistics
     # Total started orders: all active statuses (created, in_progress, overdue)
-    from django.db.models import Q, Count
     total_started = base_orders.filter(
         status__in=['created', 'in_progress', 'overdue']
     ).count()
