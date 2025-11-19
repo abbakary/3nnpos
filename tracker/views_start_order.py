@@ -81,7 +81,7 @@ def api_start_order(request):
                     # Check if there's already a started (in_progress) order for this vehicle
                     existing_order = Order.objects.filter(
                         vehicle=existing_vehicle,
-                        status='in_progress'
+                        status__in=['created', 'in_progress']
                     ).order_by('-created_at').first()
 
                     if existing_order:
@@ -91,7 +91,7 @@ def api_start_order(request):
                             'order_id': existing_order.id,
                             'order_number': existing_order.order_number,
                             'plate_number': plate_number,
-                            'started_at': existing_order.started_at.isoformat(),
+                            'started_at': existing_order.started_at.isoformat() if existing_order.started_at else None,
                             'existing_order': True,
                             'message': 'Existing order found for this plate'
                         }, status=200)
@@ -109,7 +109,8 @@ def api_start_order(request):
                             'plate': existing_vehicle.plate_number,
                             'make': existing_vehicle.make,
                             'model': existing_vehicle.model,
-                        }
+                        },
+                        'message': 'Vehicle found for existing customer. Use the existing customer link or continue to create a new order.'
                     }, status=200)
 
             # Create new customer if not using pre-selected one
@@ -299,11 +300,11 @@ def started_orders_dashboard(request):
         # Specific status requested
         orders = base_orders.filter(status=status_filter).select_related('customer', 'vehicle')
     else:
-        # Default: show active orders (created/in_progress) + completed from today
+        # Default: show active orders (created/in_progress/overdue) + completed from today
         from django.db.models import Q
         today = timezone.now().date()
         orders = base_orders.filter(
-            Q(status__in=['created', 'in_progress']) |  # All active orders
+            Q(status__in=['created', 'in_progress', 'overdue']) |  # All active orders (including overdue)
             Q(status='completed', completed_at__date=today)  # Completed today
         ).select_related('customer', 'vehicle')
 
@@ -315,10 +316,17 @@ def started_orders_dashboard(request):
             customer__full_name__icontains=search_query
         )
 
-    # Apply sorting
-    if sort_by in ['-started_at', 'started_at', 'plate_number', 'type']:
-        orders = orders.order_by(sort_by)
+    # Apply sorting (handle related fields properly)
+    if sort_by == 'plate_number':
+        orders = orders.order_by('vehicle__plate_number')
+    elif sort_by == 'type':
+        orders = orders.order_by('type')
+    elif sort_by == 'started_at':
+        orders = orders.order_by('started_at')
+    elif sort_by == '-started_at':
+        orders = orders.order_by('-started_at')
     else:
+        # Default: sort by newest first
         orders = orders.order_by('-started_at')
 
     # Group orders by plate number
@@ -330,16 +338,16 @@ def started_orders_dashboard(request):
         orders_by_plate[plate].append(order)
 
     # Calculate statistics
-    # Total started orders: both 'created' (just initiated) and 'in_progress' (actively being worked on)
+    # Total started orders: all active statuses (created, in_progress, overdue)
     from django.db.models import Q, Count
     total_started = base_orders.filter(
-        status__in=['created', 'in_progress']
+        status__in=['created', 'in_progress', 'overdue']
     ).count()
 
     # Orders started today: those created today (before or after auto-progression)
     today = timezone.now().date()
     today_started = base_orders.filter(
-        status__in=['created', 'in_progress'],
+        status__in=['created', 'in_progress', 'overdue'],
         created_at__date=today
     ).count()
 

@@ -308,25 +308,52 @@
         color: white;
     }
     
+    /* Quick Start Section Styles */
+    .quick-start-container {
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        border-radius: 8px;
+        padding: 1.5rem;
+        border-left: 4px solid #0d6efd;
+    }
+
+    .quick-start-container .form-label {
+        font-size: 0.95rem;
+        color: #495057;
+    }
+
+    .quick-start-container .btn-outline-secondary {
+        padding: 0.375rem 0.75rem;
+    }
+
     /* Responsive adjustments */
     @media (max-width: 768px) {
         .vehicle-detail-grid {
             grid-template-columns: 1fr;
             gap: 0.75rem;
         }
-        
+
         .page-header-sticky .btn {
             margin-bottom: 0.5rem;
         }
-        
+
         .card-header {
             flex-direction: column;
             align-items: flex-start;
             gap: 10px;
         }
-        
+
         .card-header .action-dropdown {
             align-self: flex-end;
+        }
+
+        .quick-start-container .row {
+            gap: 1rem !important;
+        }
+
+        .quick-start-container .col-lg-5,
+        .quick-start-container .col-lg-4,
+        .quick-start-container .col-lg-3 {
+            min-width: 100%;
         }
     }
 </style>
@@ -754,27 +781,53 @@
             </div>
         </div>
         <div class="px-3 pt-2">
-            <div class="row g-2 align-items-end">
-                <div class="col-md-4">
-                    <label class="form-label fw-medium">Vehicle Plate</label>
-                    {% with first_vehicle=customer.vehicles.first %}
-                    <input type="text" id="quickStartPlate" class="form-control" value="{% if first_vehicle %}{{ first_vehicle.plate_number }}{% endif %}" placeholder="e.g., ABC-1234" style="text-transform: uppercase;" />
-                    {% endwith %}
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label fw-medium">Quick Start</label>
-                    <div class="d-flex gap-2">
-                        <button type="button" id="quickStartBtn" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#quickOrderTypeModal">
+            <div class="quick-start-container">
+                <div class="row g-3 align-items-end">
+                    <div class="col-lg-5">
+                        <label class="form-label fw-medium">
+                            <i class="fa fa-car me-2 text-info"></i>Vehicle Plate Number
+                        </label>
+                        {% with first_vehicle=customer.vehicles.first %}
+                        <div class="input-group">
+                            <input type="text" id="quickStartPlate" class="form-control" value="{% if first_vehicle %}{{ first_vehicle.plate_number }}{% endif %}" placeholder="e.g., ABC-1234" style="text-transform: uppercase;" />
+                            {% if first_vehicle %}
+                            <button type="button" class="btn btn-outline-secondary" id="clearPlateBtn" title="Clear and enter new plate">
+                                <i class="fa fa-times"></i>
+                            </button>
+                            {% endif %}
+                        </div>
+                        {% endwith %}
+                        <small class="text-muted d-block mt-1">
+                            <i class="fa fa-info-circle me-1"></i>
+                            {% if first_vehicle %}Use existing plate or enter a new one{% else %}Enter vehicle plate number{% endif %}
+                        </small>
+                    </div>
+                    <div class="col-lg-4">
+                        <label class="form-label fw-medium">
+                            <i class="fa fa-plus-circle me-2 text-success"></i>Start New Order
+                        </label>
+                        <button type="button" id="quickStartBtn" class="btn btn-sm btn-primary w-100" data-bs-toggle="modal" data-bs-target="#quickOrderTypeModal">
                             <i class="fa fa-play me-1"></i>Start Order
                         </button>
-                        <button type="button" id="quickStopBtn" class="btn btn-sm btn-outline-danger">
-                            <i class="fa fa-stop me-1"></i>Stop Order
+                        {% if started_order_id %}<input type="hidden" id="startedOrderId" value="{{ started_order_id }}" />{% endif %}
+                    </div>
+                    <div class="col-lg-3">
+                        <label class="form-label fw-medium">
+                            <i class="fa fa-stop-circle me-2 text-danger"></i>Stop Order
+                        </label>
+                        <button type="button" id="quickStopBtn" class="btn btn-sm btn-outline-danger w-100">
+                            <i class="fa fa-stop me-1"></i>Stop
                         </button>
                     </div>
-                    {% if started_order_id %}<input type="hidden" id="startedOrderId" value="{{ started_order_id }}" />{% endif %}
                 </div>
-                <div class="col-md-4">
-                    <small class="text-muted">Start captures time; Stop marks order completed.</small>
+                <div class="row g-2 mt-1">
+                    <div class="col-12">
+                        <small class="text-muted d-block">
+                            <i class="fa fa-clock me-1"></i>
+                            <strong>Start</strong> captures order start time and customer visit.
+                            <strong>Stop</strong> marks the order as completed.
+                        </small>
+                    </div>
                 </div>
             </div>
         </div>
@@ -877,12 +930,20 @@
       return '';
     }
     const plateEl=document.getElementById('quickStartPlate');
+    const clearPlateBtn=document.getElementById('clearPlateBtn');
     const startBtn=document.getElementById('quickStartBtn');
     const stopBtn=document.getElementById('quickStopBtn');
     const startedOrderEl=document.getElementById('startedOrderId');
     const orderTypeModal = document.getElementById('quickOrderTypeModal');
     const confirmStartBtn = document.getElementById('confirmQuickStart');
     const orderTypeRadios = document.querySelectorAll('input[name="quickOrderType"]');
+
+    if(clearPlateBtn){
+      clearPlateBtn.addEventListener('click',function(){
+        if(plateEl) plateEl.value='';
+        plateEl.focus();
+      });
+    }
 
     function currentStarted(){return startedOrderEl && startedOrderEl.value ? parseInt(startedOrderEl.value,10):null;}
 

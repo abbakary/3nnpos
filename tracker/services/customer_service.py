@@ -569,6 +569,7 @@ class OrderService:
 
         try:
             with transaction.atomic():
+                from django.utils import timezone
                 # Build order data
                 order_data = {
                     'customer': customer,
@@ -579,6 +580,7 @@ class OrderService:
                     'priority': priority or 'medium',
                     'description': description or f"{order_type.title()} Order",
                     'estimated_duration': estimated_duration,
+                    'started_at': timezone.now(),  # Set started_at when order is created
                 }
 
                 # Add type-specific fields

@@ -143,10 +143,12 @@
               <div class="col-xl-2 col-lg-4 col-md-6">
                 <label class="form-label fw-medium">Status</label>
                 <select name="status" class="form-select">
-                  <option value="" {% if not status_filter %}selected{% endif %}>Active + Today's Completed</option>
-                  <option value="created" {% if status_filter == 'created' %}selected{% endif %}>Created Only</option>
+                  <option value="" {% if not status_filter %}selected{% endif %}>Active & Today's Completed</option>
+                  <option value="created" {% if status_filter == 'created' %}selected{% endif %}>Created</option>
                   <option value="in_progress" {% if status_filter == 'in_progress' %}selected{% endif %}>In Progress</option>
+                  <option value="overdue" {% if status_filter == 'overdue' %}selected{% endif %}>Overdue</option>
                   <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>Completed</option>
+                  <option value="cancelled" {% if status_filter == 'cancelled' %}selected{% endif %}>Cancelled</option>
                 </select>
               </div>
               <div class="col-xl-3 col-lg-4 col-md-6">
@@ -154,9 +156,9 @@
                   <button class="btn btn-primary flex-fill" type="submit">
                     <i class="fa fa-search me-1"></i>Search
                   </button>
-                  {% if search_query or status_filter != 'created' %}
+                  {% if search_query or status_filter %}
                   <a href="{% url 'tracker:started_orders_dashboard' %}" class="btn btn-outline-secondary" title="Clear Filters">
-                    <i class="fa fa-times"></i>
+                    <i class="fa fa-times me-1"></i>Clear
                   </a>
                   {% endif %}
                 </div>
@@ -173,7 +175,7 @@
   <div class="row g-3">
     {% for order in orders %}
     <div class="col-xl-4 col-lg-6 col-md-12">
-      <div class="card started-order-card shadow-sm h-100 border-start border-4" style="border-color: {% if order.status == 'created' %}#667eea{% elif order.status == 'in_progress' %}#ffc107{% else %}#28a745{% endif %} !important;">
+      <div class="card started-order-card shadow-sm h-100 border-start border-4" style="border-color: {% if order.status == 'created' %}#6c757d{% elif order.status == 'in_progress' %}#ffc107{% elif order.status == 'overdue' %}#dc3545{% elif order.status == 'completed' %}#28a745{% else %}#6c757d{% endif %} !important;">
         <div class="card-header bg-white d-flex justify-content-between align-items-start">
           <div>
             <h6 class="card-title mb-1">
@@ -185,10 +187,12 @@
               <i class="fa fa-clock me-1"></i>
               {% if order.status == 'created' %}
                 Started: {{ order.created_at|localtime|date_medium }}
-              {% elif order.status == 'in_progress' %}
+              {% elif order.status == 'in_progress' or order.status == 'overdue' %}
                 In Progress: {{ order.started_at|localtime|date_medium }}
               {% elif order.status == 'completed' %}
                 Completed: {{ order.completed_at|localtime|date_medium }}
+              {% elif order.status == 'cancelled' %}
+                Cancelled: {{ order.cancelled_at|localtime|date_medium }}
               {% else %}
                 {{ order.created_at|localtime|date_medium }}
               {% endif %}
@@ -199,8 +203,12 @@
               <span class="badge bg-secondary rounded-pill"><i class="fa fa-hourglass-start me-1"></i>Started</span>
             {% elif order.status == 'in_progress' %}
               <span class="badge bg-warning text-dark rounded-pill"><i class="fa fa-spinner me-1"></i>In Progress</span>
+            {% elif order.status == 'overdue' %}
+              <span class="badge bg-danger rounded-pill"><i class="fa fa-exclamation-triangle me-1"></i>Overdue</span>
             {% elif order.status == 'completed' %}
               <span class="badge bg-success rounded-pill"><i class="fa fa-check-circle me-1"></i>Completed</span>
+            {% elif order.status == 'cancelled' %}
+              <span class="badge bg-secondary rounded-pill"><i class="fa fa-times-circle me-1"></i>Cancelled</span>
             {% else %}
               <span class="badge bg-light text-dark rounded-pill">{{ order.status }}</span>
             {% endif %}
@@ -278,13 +286,17 @@
             <a href="{% url 'tracker:started_order_detail' order_id=order.id %}?tab=documents" class="btn btn-sm btn-outline-info flex-fill">
               <i class="fa fa-file-upload me-1"></i>Documents
             </a>
-            {% if order.status != 'completed' %}
+            {% if order.status not in 'completed|cancelled' %}
             <button type="button" class="btn btn-sm btn-outline-success w-100 complete-order-btn" data-order-id="{{ order.id }}" data-order-number="{{ order.order_number }}">
               <i class="fa fa-check me-1"></i>Complete
             </button>
-            {% else %}
+            {% elif order.status == 'completed' %}
             <span class="btn btn-sm btn-success w-100 disabled" style="pointer-events: none;">
               <i class="fa fa-check me-1"></i>Completed
+            </span>
+            {% elif order.status == 'cancelled' %}
+            <span class="btn btn-sm btn-secondary w-100 disabled" style="pointer-events: none;">
+              <i class="fa fa-times me-1"></i>Cancelled
             </span>
             {% endif %}
           </div>

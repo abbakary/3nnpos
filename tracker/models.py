@@ -524,6 +524,7 @@ class Invoice(models.Model):
     # Invoice details
     invoice_date = models.DateField(default=timezone.now)
     due_date = models.DateField(blank=True, null=True)
+    code_no = models.CharField(max_length=128, blank=True, null=True, help_text="Supplier/Invoice code number")
     reference = models.CharField(max_length=128, blank=True, null=True, help_text="Customer PO or reference number")
 
     # Amounts

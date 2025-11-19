@@ -356,7 +356,8 @@ def api_create_invoice_from_upload(request):
                 inv.invoice_date = timezone.localdate()
 
             # Set invoice fields
-            inv.reference = request.POST.get('invoice_number', '').strip() or f"INV-{timezone.now().strftime('%Y%m%d%H%M%S')}"
+            inv.code_no = request.POST.get('code_no', '').strip() or None
+            inv.reference = request.POST.get('reference', '').strip() or None
 
             # Collect all notes/remarks
             notes_parts = []
