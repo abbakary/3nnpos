@@ -286,13 +286,17 @@
             <a href="{% url 'tracker:started_order_detail' order_id=order.id %}?tab=documents" class="btn btn-sm btn-outline-info flex-fill">
               <i class="fa fa-file-upload me-1"></i>Documents
             </a>
-            {% if order.status != 'completed' %}
+            {% if order.status not in 'completed|cancelled' %}
             <button type="button" class="btn btn-sm btn-outline-success w-100 complete-order-btn" data-order-id="{{ order.id }}" data-order-number="{{ order.order_number }}">
               <i class="fa fa-check me-1"></i>Complete
             </button>
-            {% else %}
+            {% elif order.status == 'completed' %}
             <span class="btn btn-sm btn-success w-100 disabled" style="pointer-events: none;">
               <i class="fa fa-check me-1"></i>Completed
+            </span>
+            {% elif order.status == 'cancelled' %}
+            <span class="btn btn-sm btn-secondary w-100 disabled" style="pointer-events: none;">
+              <i class="fa fa-times me-1"></i>Cancelled
             </span>
             {% endif %}
           </div>
