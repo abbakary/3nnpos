@@ -378,11 +378,16 @@ def dashboard(request: HttpRequest):
             # Month ranges for this month's calculations
             today_date = timezone.localdate()
             month_start = today_date.replace(day=1)
+            month_end = today_date
 
-            # Get this month's invoices
+            # Get this month's invoices using created_at for accuracy
+            # (invoice_date might not be set correctly for extracted invoices)
+            month_start_datetime = timezone.make_aware(datetime.combine(month_start, datetime.min.time()))
+            month_end_datetime = timezone.make_aware(datetime.combine(month_end, datetime.max.time()))
+
             month_invoices = invoices_qs.filter(
-                invoice_date__gte=month_start,
-                invoice_date__lte=today_date
+                created_at__gte=month_start_datetime,
+                created_at__lte=month_end_datetime
             )
 
             # Calculate gross revenue this month (subtotal + VAT)
