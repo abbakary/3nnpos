@@ -426,62 +426,60 @@ def api_create_invoice_from_upload(request):
             item_prices = request.POST.getlist('item_price[]')
             item_codes = request.POST.getlist('item_code[]')
             item_units = request.POST.getlist('item_unit[]')
+            item_values = request.POST.getlist('item_value[]')
 
-            # Aggregate duplicates by code (fallback to description) before creating lines
-            bucket = {}
-            total_items = 0
-            for idx, desc in enumerate(item_descriptions):
-                if not desc or not desc.strip():
-                    continue
-                total_items += 1
-                try:
-                    code = item_codes[idx].strip() if idx < len(item_codes) and item_codes[idx] else ''
-                    key = code or desc.strip().lower()
-                    qty = int(item_qtys[idx] or 1) if idx < len(item_qtys) else 1
-                    try:
-                        price = Decimal(str(item_prices[idx] or '0').replace(',', '')) if idx < len(item_prices) else Decimal('0')
-                    except Exception:
-                        price = Decimal('0')
-                    unit = item_units[idx].strip() if idx < len(item_units) and item_units[idx] else None
-                    if key not in bucket:
-                        bucket[key] = {
-                            'code': code or None,
-                            'description': desc.strip(),
-                            'qty': 0,
-                            'unit': unit,
-                            'unit_price': price,
-                        }
-                    bucket[key]['qty'] += max(1, qty)
-                    # Prefer first non-zero price; otherwise keep existing
-                    if (bucket[key]['unit_price'] or Decimal('0')) == Decimal('0') and price:
-                        bucket[key]['unit_price'] = price
-                    if not bucket[key]['unit'] and unit:
-                        bucket[key]['unit'] = unit
-                except Exception as e:
-                    logger.warning(f"Failed to stage line item aggregation: {e}")
-
-            # Create line items without triggering per-item save() to avoid invoice total recalculation
+            # Create line items directly from extracted data (no aggregation to preserve extracted values)
             try:
                 to_create = []
-                for v in bucket.values():
-                    qty = Decimal(str(v['qty'] or 1))
-                    price = Decimal(str(v['unit_price'] or Decimal('0')))
-                    line_total = qty * price
-                    to_create.append(InvoiceLineItem(
-                        invoice=inv,
-                        code=v['code'],
-                        description=v['description'],
-                        quantity=qty,
-                        unit=v['unit'],
-                        unit_price=price,
-                        tax_rate=Decimal('0'),
-                        line_total=line_total,
-                        tax_amount=Decimal('0'),
-                    ))
+                for idx, desc in enumerate(item_descriptions):
+                    if not desc or not desc.strip():
+                        continue
+                    try:
+                        code = item_codes[idx].strip() if idx < len(item_codes) and item_codes[idx] else None
+                        unit = item_units[idx].strip() if idx < len(item_units) and item_units[idx] else None
+
+                        # Parse quantity
+                        qty_val = item_qtys[idx] if idx < len(item_qtys) else 1
+                        try:
+                            qty = Decimal(str(qty_val or 1).replace(',', ''))
+                        except Exception:
+                            qty = Decimal('1')
+
+                        # Parse unit price
+                        price_val = item_prices[idx] if idx < len(item_prices) else Decimal('0')
+                        try:
+                            unit_price = Decimal(str(price_val or '0').replace(',', ''))
+                        except Exception:
+                            unit_price = Decimal('0')
+
+                        # Use extracted line value directly (critical: NO RECALCULATION)
+                        # This preserves the actual invoice data as extracted from the PDF
+                        extracted_value = item_values[idx] if idx < len(item_values) else None
+                        try:
+                            line_total = Decimal(str(extracted_value or '0').replace(',', '')) if extracted_value else (qty * unit_price)
+                        except Exception:
+                            line_total = qty * unit_price
+
+                        to_create.append(InvoiceLineItem(
+                            invoice=inv,
+                            code=code,
+                            description=desc.strip(),
+                            quantity=qty,
+                            unit=unit,
+                            unit_price=unit_price,
+                            tax_rate=Decimal('0'),
+                            line_total=line_total,
+                            tax_amount=Decimal('0'),
+                        ))
+                    except Exception as e:
+                        logger.warning(f"Failed to process line item {idx}: {e}")
+                        continue
+
                 if to_create:
                     InvoiceLineItem.objects.bulk_create(to_create)
+                    logger.info(f"Created {len(to_create)} line items from extracted data with preserved values")
             except Exception as e:
-                logger.warning(f"Failed to bulk create aggregated line items: {e}")
+                logger.warning(f"Failed to bulk create line items: {e}")
 
             # IMPORTANT: Preserve extracted Net, VAT, Gross values for uploaded invoices
             inv.subtotal = subtotal
