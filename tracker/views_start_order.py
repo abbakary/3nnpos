@@ -16,7 +16,7 @@ from django.utils import timezone
 from django.db import transaction
 
 from .models import Order, Customer, Vehicle, Branch, ServiceType, ServiceAddon, InventoryItem, Invoice, InvoiceLineItem
-from .utils import get_user_branch
+from .utils import get_user_branch, scope_queryset
 from .services import OrderService
 
 logger = logging.getLogger(__name__)
