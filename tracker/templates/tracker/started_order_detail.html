@@ -1060,6 +1060,61 @@
         <strong>No documents uploaded yet.</strong> Upload an invoice or quotation to get started.
       </div>
       {% endif %}
+
+      <!-- Order Components Section -->
+      {% if order.components.exists %}
+      <div class="card shadow-sm mt-4">
+        <div class="card-header bg-gradient-info text-white">
+          <h6 class="mb-0"><i class="fa fa-layer-group me-2"></i>Additional Order Types</h6>
+          <small class="text-white-50">Multiple order types associated with this invoice</small>
+        </div>
+        <div class="card-body">
+          {% for component in order.components.all %}
+          <div class="component-item mb-3 p-3 border rounded" style="background-color: #f8f9fa;">
+            <div class="d-flex justify-content-between align-items-start">
+              <div class="flex-grow-1">
+                <div class="d-flex align-items-center mb-2">
+                  {% if component.type == 'service' %}
+                    <i class="fa fa-wrench text-primary me-2"></i>
+                    <span class="badge bg-primary">SERVICE ORDER</span>
+                  {% elif component.type == 'sales' %}
+                    <i class="fa fa-shopping-cart text-success me-2"></i>
+                    <span class="badge bg-success">SALES ORDER</span>
+                  {% else %}
+                    <span class="badge bg-secondary">{{ component.get_type_display|upper }}</span>
+                  {% endif %}
+                  <small class="text-muted ms-2">Added {{ component.added_at|localtime|date:"M j, Y g:i a" }}</small>
+                </div>
+                {% if component.reason %}
+                <div class="mt-2">
+                  <small class="text-muted d-block"><strong>Reason:</strong></small>
+                  <p class="mb-0 text-dark">{{ component.reason }}</p>
+                </div>
+                {% endif %}
+                {% if component.invoice %}
+                <div class="mt-2">
+                  <small class="text-muted d-block"><strong>Associated Invoice:</strong></small>
+                  <div class="d-flex align-items-center gap-2">
+                    <i class="fa fa-file-pdf text-danger"></i>
+                    <a href="{% url 'tracker:invoice_detail' pk=component.invoice.id %}" class="text-decoration-none fw-medium">
+                      {{ component.invoice.invoice_number }}
+                    </a>
+                    <span class="badge bg-secondary">{{ component.invoice.total_amount|floatformat:2 }}</span>
+                  </div>
+                </div>
+                {% endif %}
+              </div>
+              <div class="component-actions">
+                {% if component.signed_at %}
+                <span class="badge bg-success"><i class="fa fa-check me-1"></i>Signed</span>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
     </div>
 
     <!-- Details Tab -->

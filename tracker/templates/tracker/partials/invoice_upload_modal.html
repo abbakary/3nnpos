@@ -646,5 +646,92 @@
     }
     return dateStr;
   }
+
+  function renderAdditionalOrderTypes() {
+    additionalOrderTypesList.innerHTML = '';
+    additionalOrderTypesSection.style.display = additionalOrderTypes.length > 0 ? 'block' : 'none';
+
+    additionalOrderTypes.forEach((item, idx) => {
+      const typeLabel = item.type === 'service' ? 'Service Order' : item.type === 'sales' ? 'Sales Order' : 'Inquiry';
+      const typeIcon = item.type === 'service' ? 'wrench' : item.type === 'sales' ? 'shopping-cart' : 'question-circle';
+      const typeBadgeClass = item.type === 'service' ? 'bg-primary' : item.type === 'sales' ? 'bg-success' : 'bg-info';
+
+      const itemDiv = document.createElement('div');
+      itemDiv.className = 'list-group-item border-bottom';
+      itemDiv.innerHTML = `
+        <div class="d-flex justify-content-between align-items-start">
+          <div class="flex-grow-1">
+            <div class="mb-1">
+              <span class="badge ${typeBadgeClass}">
+                <i class="fa fa-${typeIcon} me-1"></i>${typeLabel}
+              </span>
+            </div>
+            <small class="text-muted d-block mb-1"><strong>Reason:</strong></small>
+            <p class="mb-0 text-dark">${item.reason}</p>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline-danger ms-2" onclick="window.removeAdditionalOrderType(${idx})">
+            <i class="fa fa-trash me-1"></i>Remove
+          </button>
+        </div>
+      `;
+      additionalOrderTypesList.appendChild(itemDiv);
+    });
+  }
+
+  window.removeAdditionalOrderType = function(idx) {
+    if (confirm('Remove this additional order type?')) {
+      additionalOrderTypes.splice(idx, 1);
+      renderAdditionalOrderTypes();
+    }
+  };
+
+  if (confirmAddOrderTypeBtn) {
+    confirmAddOrderTypeBtn.addEventListener('click', function() {
+      const orderType = additionalOrderTypeSelect.value.trim();
+      const reason = additionalOrderTypeReason.value.trim();
+
+      if (!orderType) {
+        errorBox.style.display = 'block';
+        errorBox.innerHTML = '<i class="fa fa-warning me-2"></i>Please select an order type.';
+        errorBox.className = 'alert alert-warning';
+        return;
+      }
+
+      if (!reason) {
+        errorBox.style.display = 'block';
+        errorBox.innerHTML = '<i class="fa fa-warning me-2"></i>Please provide a reason for the additional order type.';
+        errorBox.className = 'alert alert-warning';
+        return;
+      }
+
+      additionalOrderTypes.push({ type: orderType, reason: reason });
+
+      additionalOrderTypeSelect.value = '';
+      additionalOrderTypeReason.value = '';
+
+      if (addOrderTypeModal) {
+        const modalInstance = bootstrap.Modal.getInstance(addOrderTypeModal);
+        if (modalInstance) {
+          modalInstance.hide();
+        }
+      }
+
+      renderAdditionalOrderTypes();
+      errorBox.style.display = 'none';
+    });
+  }
+
+  invoiceForm.addEventListener('submit', function(e) {
+    const hiddenOrderTypes = hiddenFieldsDiv.querySelector('input[name="additional_order_types"]');
+    if (hiddenOrderTypes) {
+      hiddenOrderTypes.value = JSON.stringify(additionalOrderTypes);
+    } else if (additionalOrderTypes.length > 0) {
+      const inp = document.createElement('input');
+      inp.type = 'hidden';
+      inp.name = 'additional_order_types';
+      inp.value = JSON.stringify(additionalOrderTypes);
+      hiddenFieldsDiv.appendChild(inp);
+    }
+  });
 })();
 </script>

@@ -211,7 +211,12 @@ def dashboard(request: HttpRequest):
     _mark_overdue_orders(hours=24)
     # Always calculate fresh metrics for accurate data
     today = timezone.localdate()
-    
+
+    # Import aggregation functions and datetime utilities at the top of the function to avoid UnboundLocalError
+    from decimal import Decimal
+    from django.db.models import Sum, Count, Avg
+    from datetime import datetime
+
     # Branch-scoped base querysets with safe fallback for staff/admin without branch assignment
     # Exclude temporary customers (those with full_name starting with "Plate " and phone starting with "PLATE_")
     from .utils import get_user_branch
@@ -344,91 +349,76 @@ def dashboard(request: HttpRequest):
         # Count of out of stock items
         out_of_stock_count = InventoryItem.objects.filter(quantity=0).count()
         
-        # Revenue aggregation from Invoices (Net Value = subtotal, excludes VAT)
-        from decimal import Decimal
-        from django.db.models import Sum
-        from tracker.models import Invoice, InvoicePayment
+        # Revenue KPI Calculations from Invoices
+        # New accurate metrics: Gross Revenue (subtotal + VAT) for both this month and all-time
+        from tracker.models import Invoice
 
-        total_revenue = Decimal('0')
-        revenue_this_month = Decimal('0')
-        total_vat = Decimal('0')
-        vat_this_month = Decimal('0')
-        total_gross = Decimal('0')
-        gross_this_month = Decimal('0')
-        total_invoiced = Decimal('0')
-        invoiced_this_month = Decimal('0')
-        revenue_by_branch = {}
+        gross_revenue_this_month = Decimal('0')
+        total_gross_revenue = Decimal('0')
+        avg_invoice_amount = Decimal('0')
+        invoices_this_month_count = 0
         revenue_by_branch_tsh = {}
+
         try:
             # Scope invoices to user's branch/permissions
             invoices_qs = scope_queryset(Invoice.objects.all(), request.user, request)
 
-            # Net revenue (subtotal excluding VAT) - this is the primary revenue metric
-            # and is now calculated from extracted invoices as well as manually created ones
-            inv_sums = invoices_qs.aggregate(
-                total_net=Sum('subtotal'),
-                total_vat=Sum('tax_amount'),
-                total_gross=Sum('total_amount')
+            # Calculate total gross revenue (all time) = sum of total_amount (subtotal + VAT)
+            total_gross_sums = invoices_qs.aggregate(
+                total_gross=Sum('total_amount'),
+                total_count=Count('id'),
+                avg_gross=Avg('total_amount')
             )
-            if inv_sums.get('total_net') is not None:
-                total_revenue = Decimal(str(inv_sums.get('total_net')))
-            if inv_sums.get('total_vat') is not None:
-                total_vat = Decimal(str(inv_sums.get('total_vat')))
-            if inv_sums.get('total_gross') is not None:
-                total_gross = Decimal(str(inv_sums.get('total_gross')))
 
-            # For backward compatibility, keep total_invoiced as total_amount
-            total_invoiced = total_gross
+            if total_gross_sums.get('total_gross') is not None:
+                total_gross_revenue = Decimal(str(total_gross_sums.get('total_gross')))
 
-            # Month ranges
+            if total_gross_sums.get('avg_gross') is not None:
+                avg_invoice_amount = Decimal(str(total_gross_sums.get('avg_gross')))
+
+            # Month ranges for this month's calculations
             today_date = timezone.localdate()
             month_start = today_date.replace(day=1)
+            month_end = today_date
 
-            inv_month_sums = invoices_qs.filter(
-                invoice_date__gte=month_start,
-                invoice_date__lte=today_date
-            ).aggregate(
-                month_net=Sum('subtotal'),
-                month_vat=Sum('tax_amount'),
-                month_gross=Sum('total_amount')
+            # Get this month's invoices using created_at for accuracy
+            # (invoice_date might not be set correctly for extracted invoices)
+            month_start_datetime = timezone.make_aware(datetime.combine(month_start, datetime.min.time()))
+            month_end_datetime = timezone.make_aware(datetime.combine(month_end, datetime.max.time()))
+
+            month_invoices = invoices_qs.filter(
+                created_at__gte=month_start_datetime,
+                created_at__lte=month_end_datetime
             )
-            if inv_month_sums.get('month_net') is not None:
-                revenue_this_month = Decimal(str(inv_month_sums.get('month_net')))
-            if inv_month_sums.get('month_vat') is not None:
-                vat_this_month = Decimal(str(inv_month_sums.get('month_vat')))
-            if inv_month_sums.get('month_gross') is not None:
-                gross_this_month = Decimal(str(inv_month_sums.get('month_gross')))
 
-            # For backward compatibility
-            invoiced_this_month = gross_this_month
+            # Calculate gross revenue this month (subtotal + VAT)
+            month_gross_sums = month_invoices.aggregate(
+                month_gross=Sum('total_amount'),
+                month_count=Count('id')
+            )
 
-            # Revenue by branch (Net Value = subtotal, excluding VAT)
-            rows = invoices_qs.values_list('subtotal', 'branch__name')
-            for subtotal_amt, branch_name in rows:
-                try:
-                    amount = Decimal(str(subtotal_amt)) if subtotal_amt is not None else Decimal('0')
-                except Exception:
-                    continue
-                b = branch_name or 'Unassigned'
-                if b not in revenue_by_branch:
-                    revenue_by_branch[b] = Decimal('0')
-                revenue_by_branch[b] += amount
+            if month_gross_sums.get('month_gross') is not None:
+                gross_revenue_this_month = Decimal(str(month_gross_sums.get('month_gross')))
 
-            # Build TSHS-specific view using branch totals (Net)
-            for b, amt in revenue_by_branch.items():
-                revenue_by_branch_tsh[b] = amt
+            if month_gross_sums.get('month_count') is not None:
+                invoices_this_month_count = month_gross_sums.get('month_count')
+
+            # Revenue by branch (Gross Value)
+            branch_sums = invoices_qs.values('branch__name').annotate(
+                total=Sum('total_amount')
+            ).order_by('branch__name')
+
+            for item in branch_sums:
+                branch_name = item['branch__name'] or 'Unassigned'
+                amount = Decimal(str(item['total'])) if item['total'] is not None else Decimal('0')
+                revenue_by_branch_tsh[branch_name] = amount
 
         except Exception as e:
-            logger.error(f"Error aggregating revenue from invoices: {e}")
-            total_revenue = Decimal('0')
-            revenue_this_month = Decimal('0')
-            total_vat = Decimal('0')
-            vat_this_month = Decimal('0')
-            total_gross = Decimal('0')
-            gross_this_month = Decimal('0')
-            total_invoiced = Decimal('0')
-            invoiced_this_month = Decimal('0')
-            revenue_by_branch = {}
+            logger.error(f"Error aggregating revenue KPIs from invoices: {e}")
+            gross_revenue_this_month = Decimal('0')
+            total_gross_revenue = Decimal('0')
+            avg_invoice_amount = Decimal('0')
+            invoices_this_month_count = 0
             revenue_by_branch_tsh = {}
 
         metrics = {
@@ -444,17 +434,11 @@ def dashboard(request: HttpRequest):
             'new_customers_this_month': new_customers_this_month,
             'pending_inquiries_count': pending_inquiries_count,
             'average_order_value': average_order_value,
-            # Revenue metrics - now calculated from invoice.subtotal (Net Value excluding VAT)
-            # These work for both manually created and extracted invoices
-            'total_revenue': total_revenue,            # Net revenue (subtotal) from all invoices
-            'total_paid': total_revenue,               # Alias for backward compatibility
-            'revenue_this_month': revenue_this_month,  # Net revenue this month
-            'total_invoiced': total_invoiced,          # Gross value (subtotal + VAT) - backward compat
-            'invoiced_this_month': invoiced_this_month,
-            'total_vat': total_vat,                    # Total VAT from all invoices
-            'vat_this_month': vat_this_month,          # VAT this month
-            'total_gross': total_gross,                # Gross value (total_amount = subtotal + VAT)
-            'gross_this_month': gross_this_month,      # Gross this month
+            # Revenue KPIs - Fresh calculation based on Gross Revenue (subtotal + VAT)
+            'gross_revenue_this_month': gross_revenue_this_month,      # Gross revenue this month
+            'total_gross_revenue': total_gross_revenue,                # Total gross revenue (all time)
+            'avg_invoice_amount': avg_invoice_amount,                  # Average invoice amount
+            'invoices_this_month_count': invoices_this_month_count,    # Number of invoices this month
             'upcoming_appointments': list(upcoming_appointments.values('id', 'customer__full_name', 'created_at')),
             'top_customers': list(top_customers.values('id', 'full_name', 'order_count', 'phone', 'email', 'total_spent', 'latest_order_date', 'registration_date')),
             'recent_orders': list(orders_qs.select_related("customer").exclude(status="completed").order_by("-created_at").values('id', 'customer__full_name', 'status', 'created_at')[:10]),
@@ -490,7 +474,7 @@ def dashboard(request: HttpRequest):
     # Use completed_today from metrics if available, otherwise calculate fresh
     completed_today_final = metrics.get('completed_today', completed_today)
     
-    context = {**metrics, "recent_orders": recent_orders, "completed_today": completed_today_final, "current_time": timezone.now(), "revenue_by_branch": revenue_by_branch, "revenue_by_branch_tsh": revenue_by_branch_tsh}
+    context = {**metrics, "recent_orders": recent_orders, "completed_today": completed_today_final, "current_time": timezone.now(), "revenue_by_branch_tsh": revenue_by_branch_tsh}
     # render after charts
 
     # Build sales_chart_json (monthly Orders vs Completed for last 12 months)
