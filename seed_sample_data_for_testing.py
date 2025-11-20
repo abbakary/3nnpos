@@ -1,12 +1,29 @@
 #!/usr/bin/env python
 """
 Seed script to create sample data with 10 customers and 20 orders.
-Demonstrates all order statuses correctly:
-- created: Orders just created (0-5 minutes old)
-- in_progress: Orders auto-progressed after 10 minutes
-- overdue: Orders that have been in progress for 9+ working hours
-- completed: Finished orders with completion timestamps
-- cancelled: Cancelled orders with cancellation reasons
+Demonstrates auto-progression lifecycle correctly:
+
+AUTO-PROGRESSION FLOW:
+  1. created (1-8 min old)
+     → Middleware auto-progresses to 'in_progress' once 10 minutes elapsed
+     → started_at is set by middleware when auto-progressing
+
+  2. in_progress (11+ min old)
+     → Auto-progressed from 'created' by middleware
+     → Actively being worked on
+
+  3. overdue (9+ working hours in progress)
+     → When 'in_progress' order exceeds 9 working hours (8 AM - 5 PM)
+     → Middleware marks as 'overdue' based on started_at timestamp
+
+  4. completed
+     → Finished orders with completion_at timestamp
+
+  5. cancelled
+     → Cancelled with cancellation_reason
+
+The middleware (tracker/middleware.py) handles all transitions automatically.
+No manual status changes needed - it's fully automated!
 """
 
 import os
