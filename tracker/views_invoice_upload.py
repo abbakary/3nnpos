@@ -240,7 +240,7 @@ def api_create_invoice_from_upload(request):
                 except Exception as e:
                     logger.warning(f"Failed to check/update temporary customer: {e}")
             else:
-                # Require minimum customer info only when creating/looking up by details
+                # No pre-selected customer - require minimum customer info and check for existing customers
                 if not customer_name:
                     return JsonResponse({'success': False, 'message': 'Customer name is required'})
 
@@ -270,29 +270,66 @@ def api_create_invoice_from_upload(request):
                             customer_obj.tax_number = tax_num; updated = True
                         if updated:
                             customer_obj.save()
+                        logger.info(f"Found existing customer by name for invoice upload: {customer_obj.id} - {customer_name}")
                     else:
-                        customer_obj, created = CustomerService.create_or_get_customer(
-                            branch=user_branch,
-                            full_name=customer_name,
+                        # Phone is provided - check for existing customer with this phone first
+                        existing_by_phone = Customer.objects.filter(
                             phone=customer_phone,
-                            email=customer_email,
-                            address=customer_address,
-                            customer_type=customer_type,
-                            organization_name=org_name,
-                            tax_number=tax_num,
-                            create_if_missing=True
-                        )
+                            branch=user_branch
+                        ).first()
+
+                        if existing_by_phone:
+                            # Use existing customer, update details if needed
+                            customer_obj = existing_by_phone
+                            created = False
+                            updated = False
+
+                            # Update customer details if provided and different
+                            if customer_name and customer_obj.full_name != customer_name:
+                                customer_obj.full_name = customer_name
+                                updated = True
+                            if customer_email and (not customer_obj.email or customer_obj.email != customer_email):
+                                customer_obj.email = customer_email
+                                updated = True
+                            if customer_address and (not customer_obj.address or customer_obj.address != customer_address):
+                                customer_obj.address = customer_address
+                                updated = True
+                            if customer_type and (not customer_obj.customer_type or customer_obj.customer_type != customer_type):
+                                customer_obj.customer_type = customer_type
+                                updated = True
+                            if org_name and (not customer_obj.organization_name or customer_obj.organization_name != org_name):
+                                customer_obj.organization_name = org_name
+                                updated = True
+                            if tax_num and (not customer_obj.tax_number or customer_obj.tax_number != tax_num):
+                                customer_obj.tax_number = tax_num
+                                updated = True
+
+                            if updated:
+                                customer_obj.save()
+
+                            logger.info(f"Found existing customer by phone for invoice upload: {customer_obj.id} - {customer_name}")
+                        else:
+                            # No existing customer found, create a new one
+                            customer_obj, created = CustomerService.create_or_get_customer(
+                                branch=user_branch,
+                                full_name=customer_name,
+                                phone=customer_phone,
+                                email=customer_email,
+                                address=customer_address,
+                                customer_type=customer_type,
+                                organization_name=org_name,
+                                tax_number=tax_num,
+                                create_if_missing=True
+                            )
+
+                            if created:
+                                logger.info(f"Created new customer from invoice upload: {customer_obj.id} - {customer_name}")
 
                     if not customer_obj:
                         return JsonResponse({
                             'success': False,
                             'message': 'Failed to create or find customer'
                         })
-
-                    if created:
-                        logger.info(f"Created new customer from invoice upload: {customer_obj.id} - {customer_name}")
-                    else:
-                        logger.info(f"Found existing customer for invoice upload: {customer_obj.id} - {customer_name}")
 
                 except Exception as e:
                     logger.error(f"Error in customer creation/lookup for invoice: {e}")
